@@ -38,7 +38,7 @@ That's it! The launcher will automatically:
 
 - **OS**: Linux (Ubuntu/Debian recommended)
 - **Python**: 3.8 or higher
-- **Hardware**: MemryX acceleration cards (optional but recommended)
+- **Hardware**: MemryX m.2 module(s)
 - **Dependencies**: Automatically installed by launcher
 
 ## Usage
