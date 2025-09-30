@@ -6,6 +6,89 @@
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
+# Configuration flags
+FRIGATE_UPDATE_FLAG=true  # Set to false to skip Frigate updates
+
+# Auto-update function for the control panel
+check_and_update_control_panel() {
+    echo "🔍 Checking for Frigate Control Panel updates..."
+    
+    # Check if we're in a git repository
+    if [ -d ".git" ]; then
+        # Fetch latest changes quietly
+        if git fetch origin main 2>/dev/null; then
+            # Check if there are updates available
+            LOCAL=$(git rev-parse HEAD 2>/dev/null)
+            REMOTE=$(git rev-parse origin/main 2>/dev/null)
+            
+            if [ "$LOCAL" != "$REMOTE" ] && [ -n "$LOCAL" ] && [ -n "$REMOTE" ]; then
+                echo "📥 Control panel updates available! Pulling latest changes..."
+                
+                # Stash any local changes to prevent conflicts
+                git stash push -m "Auto-stash before update $(date)" 2>/dev/null
+                
+                # Pull latest changes
+                if git pull origin main 2>/dev/null; then
+                    echo "✅ Control panel updated successfully!"
+                    
+                    # Check if launch.sh was updated
+                    if git diff --name-only HEAD~1 HEAD | grep -q "launch.sh"; then
+                        echo "🔄 Launch script updated! Restarting with new version..."
+                        chmod +x launch.sh  # Ensure it's still executable
+                        exec "$0" "$@"  # Restart the script with new version
+                    fi
+                else
+                    echo "⚠️  Failed to update control panel, continuing with current version..."
+                fi
+            else
+                echo "✅ Control panel is up to date!"
+            fi
+        else
+            echo "⚠️  Could not check for updates (no internet or git issues)"
+        fi
+    else
+        echo "ℹ️  Not a git repository, skipping auto-update"
+    fi
+    echo ""
+}
+
+# Auto-update function for Frigate
+update_frigate_if_enabled() {
+    if [ "$FRIGATE_UPDATE_FLAG" = true ]; then
+        echo "🔄 Frigate update flag is enabled - checking for Frigate updates..."
+        
+        # Check if frigate directory exists
+        if [ -d "frigate" ]; then
+            echo "📥 Updating existing Frigate installation..."
+            cd frigate
+            if [ -d ".git" ]; then
+                git fetch origin dev 2>/dev/null
+                LOCAL_FRIGATE=$(git rev-parse HEAD 2>/dev/null)
+                REMOTE_FRIGATE=$(git rev-parse origin/dev 2>/dev/null)
+                
+                if [ "$LOCAL_FRIGATE" != "$REMOTE_FRIGATE" ] && [ -n "$LOCAL_FRIGATE" ] && [ -n "$REMOTE_FRIGATE" ]; then
+                    echo "📥 Frigate updates available! Pulling latest changes..."
+                    git pull origin dev 2>/dev/null && echo "✅ Frigate updated successfully!" || echo "⚠️  Frigate update failed"
+                else
+                    echo "✅ Frigate is up to date!"
+                fi
+            else
+                echo "⚠️  Frigate directory exists but is not a git repository"
+            fi
+            cd "$SCRIPT_DIR"
+        else
+            echo "ℹ️  Frigate not installed yet - will be installed during setup process"
+        fi
+    else
+        echo "⏭️  Frigate update flag is disabled - skipping Frigate updates"
+    fi
+    echo ""
+}
+
+# Run auto-update checks
+check_and_update_control_panel
+update_frigate_if_enabled
+
 # Detect if running in GUI mode and setup logging
 if [ -z "$TERM" ] || [ "$TERM" = "dumb" ]; then
     # GUI mode - create a log file
