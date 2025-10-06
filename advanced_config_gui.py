@@ -7,13 +7,39 @@ A comprehensive GUI for advanced Frigate configuration management
 from PySide6.QtWidgets import (QApplication, QWidget, QVBoxLayout, QLabel, QLineEdit,
                                QPushButton, QCheckBox, QComboBox, QSpinBox,
                                QFileDialog, QTextEdit, QTabWidget, QFormLayout, QListWidget, 
-                               QListWidgetItem, QHBoxLayout, QFrame, QMessageBox, QGroupBox, QButtonGroup, QRadioButton, QDialog, QScrollArea) 
+                               QListWidgetItem, QHBoxLayout, QFrame, QMessageBox, QGroupBox, QButtonGroup, QRadioButton, QDialog, QScrollArea,
+                               QTableWidget, QTableWidgetItem, QHeaderView, QProgressBar, QSizePolicy) 
 from PySide6.QtGui import QPixmap, QFont
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal, QThread, QTimer
 import yaml
 import sys
 import os
 import glob
+import socket
+import struct
+import uuid
+import time
+import threading
+import atexit
+import traceback
+import xml.etree.ElementTree as ET
+import urllib.request
+import urllib.parse
+import re
+
+# Import ONVIF discovery classes from simple_camera_gui instead of duplicating
+try:
+    from camera_gui import (
+        ONVIFDiscoveryWorker,
+        ONVIFDiscoveryDialog,  # This is the correct class name
+        SimpleCameraGUI,
+        cleanup_all_threads,
+        _active_onvif_workers
+    )
+    ONVIF_AVAILABLE = True
+except ImportError as e:
+    print(f"Warning: Could not import ONVIF classes from simple_camera_gui: {e}")
+    ONVIF_AVAILABLE = False
 
 class MyDumper(yaml.Dumper):
     def write_line_break(self, data=None):
@@ -21,6 +47,47 @@ class MyDumper(yaml.Dumper):
         # add an extra line break for top-level keys
         if len(self.indents) == 1:  
             super().write_line_break()
+    
+    @staticmethod
+    def add_camera_spacing(yaml_content):
+        """Add extra spacing between camera entries in YAML content"""
+        lines = yaml_content.split('\n')
+        result_lines = []
+        in_cameras_section = False
+        camera_indent_level = None
+        
+        for i, line in enumerate(lines):
+            # Check if we're entering the cameras section
+            if line.strip() == 'cameras:' or line.rstrip().endswith('cameras:'):
+                in_cameras_section = True
+                camera_indent_level = None
+                result_lines.append(line)
+                continue
+            
+            # Check if we've left the cameras section (new top-level key)
+            if in_cameras_section and line and not line.startswith(' ') and not line.startswith('\t') and ':' in line:
+                in_cameras_section = False
+                camera_indent_level = None
+            
+            if in_cameras_section and line.strip():
+                # Determine camera entry indent level (first camera sets the pattern)
+                if camera_indent_level is None and line.startswith(' ') and ':' in line:
+                    camera_indent_level = len(line) - len(line.lstrip())
+                
+                # If this is a camera entry (same indent as first camera, has colon)
+                if (camera_indent_level is not None and 
+                    line.startswith(' ' * camera_indent_level) and 
+                    not line.startswith(' ' * (camera_indent_level + 1)) and
+                    ':' in line and
+                    line.strip().endswith(':')):
+                    
+                    # Add blank line before camera entry (except for the first one)
+                    if result_lines and result_lines[-1].strip():  # Don't add if previous line is already blank
+                        result_lines.append('')
+            
+            result_lines.append(line)
+        
+        return '\n'.join(result_lines)
 
 class AdvancedSettingsDialog(QDialog):
     def __init__(self, parent=None):
@@ -63,12 +130,17 @@ class AdvancedSettingsDialog(QDialog):
         ok_btn = QPushButton("OK")
         back_btn = QPushButton("Go Back")
         
-        # Modify OK button to exit with code 2 (indicating manual edit)
-        ok_btn.clicked.connect(lambda: (
-            self.accept(),
-            QApplication.instance().closeAllWindows(),
-            QApplication.instance().exit(2)  # Exit code 2 for manual edit
-        ))
+        # Modify OK button to close appropriately (indicating manual edit)
+        def handle_ok_click():
+            self.accept()
+            # Get parent ConfigGUI to use smart_close
+            if hasattr(self.parent(), 'smart_close'):
+                self.parent().smart_close(2)
+            else:
+                # Fallback for standalone mode
+                QApplication.instance().exit(2)
+        
+        ok_btn.clicked.connect(handle_ok_click)
         back_btn.clicked.connect(self.reject)
         
         btn_layout.addWidget(back_btn)
@@ -127,14 +199,28 @@ class CameraSetupDialog(QDialog):
         self.setWindowTitle("📖 Camera Setup Guide - Frigate + MemryX")
         self.setModal(True)
         
-        # Set window properties
-        self.setMinimumSize(900, 800)
+        # Set window properties - make responsive
+        self.setMinimumSize(600, 400)  # Smaller minimum size
         self.resize(1000, 850)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         
-        # Main layout
-        layout = QVBoxLayout()
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(0)
+        # Main layout with scroll area for responsive design
+        main_scroll = QScrollArea()
+        main_scroll.setWidgetResizable(True)
+        main_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        main_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        
+        scroll_content = QWidget()
+        layout = QVBoxLayout(scroll_content)
+        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setSpacing(10)
+        
+        main_scroll.setWidget(scroll_content)
+        
+        # Main dialog layout
+        dialog_layout = QVBoxLayout(self)
+        dialog_layout.setContentsMargins(0, 0, 0, 0)
+        dialog_layout.addWidget(main_scroll)
         
         # Header section
         header_widget = QWidget()
@@ -543,8 +629,10 @@ class ConfigGUI(QWidget):
         self.config_saved = False   # track if user pressed save
         self.advanced_settings_exit = False  # New flag to track exit via Advanced Settings
 
-        # Global Layout
+        # Global Layout with responsive setup
         layout = QVBoxLayout(self)
+        layout.setContentsMargins(5, 5, 5, 5)  # Smaller margins for compact layout
+        layout.setSpacing(5)
 
         # Theme removed - using only professional light theme
 
@@ -637,9 +725,14 @@ class ConfigGUI(QWidget):
         layout.addWidget(line)
 
         ################################
-        # Tabs
+        # Tabs with Responsive Design
         ################################
         tabs = QTabWidget()
+        tabs.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        tabs.setTabPosition(QTabWidget.North)
+        
+        # Make tabs responsive to content
+        tabs.setElideMode(Qt.ElideRight)  # Elide tab text if window is too narrow
 
         # --- MQTT Tab
         self.mqtt_enabled = QCheckBox("Enable MQTT")
@@ -650,14 +743,34 @@ class ConfigGUI(QWidget):
         self.mqtt_port = QLineEdit("1883")
         self.mqtt_topic = QLineEdit("frigate")
 
-        mqtt_layout = QFormLayout()
+        # Create MQTT tab with scroll area
+        mqtt_scroll = QScrollArea()
+        mqtt_scroll.setWidgetResizable(True)
+        mqtt_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        mqtt_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        
+        mqtt_content = QWidget()
+        mqtt_main_layout = QVBoxLayout(mqtt_content)
+        mqtt_main_layout.setContentsMargins(10, 10, 10, 10)
+        mqtt_main_layout.setSpacing(10)
+        
+        # MQTT form
+        mqtt_form_widget = QWidget()
+        mqtt_layout = QFormLayout(mqtt_form_widget)
+        mqtt_layout.setFieldGrowthPolicy(QFormLayout.ExpandingFieldsGrow)
+        mqtt_layout.setRowWrapPolicy(QFormLayout.WrapLongRows)
+        
+        # Make form fields responsive
+        self.mqtt_host.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.mqtt_port.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.mqtt_topic.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        
         mqtt_layout.addRow("Enable", self.mqtt_enabled)
         mqtt_layout.addRow("Host", self.mqtt_host)
         mqtt_layout.addRow("Port", self.mqtt_port)
         mqtt_layout.addRow("Topic Prefix", self.mqtt_topic)
-
-        mqtt_widget = QWidget()
-        mqtt_widget.setLayout(mqtt_layout)
+        
+        mqtt_main_layout.addWidget(mqtt_form_widget)
 
         # Professional styling for MQTT docs
         mqtt_docs_bg = "background: #f5f5f5; border-radius: 10px; padding: 8px;"
@@ -680,12 +793,25 @@ class ConfigGUI(QWidget):
         mqtt_docs_container.setStyleSheet(mqtt_docs_bg)
         mqtt_docs_layout.addWidget(mqtt_docs_label)
 
-        mqtt_layout.addRow(mqtt_docs_container)
+        # Add docs to main mqtt layout\n        mqtt_main_layout.addWidget(mqtt_docs_container)\n        mqtt_main_layout.addStretch()  # Add stretch to push content to top\n        \n        # Set scroll area widget\n        mqtt_scroll.setWidget(mqtt_content)
 
-        tabs.addTab(mqtt_widget, "MQTT")
+        tabs.addTab(mqtt_scroll, "MQTT")
 
-        # --- Detector Tab (only MemryX) ---
-        detector_layout = QFormLayout()
+        # --- Detector Tab (only MemryX) with Scroll Area ---
+        detector_scroll = QScrollArea()
+        detector_scroll.setWidgetResizable(True)
+        detector_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        detector_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        
+        detector_content = QWidget()
+        detector_main_layout = QVBoxLayout(detector_content)
+        detector_main_layout.setContentsMargins(10, 10, 10, 10)
+        detector_main_layout.setSpacing(10)
+        
+        # Detector form
+        detector_form_widget = QWidget()
+        detector_layout = QFormLayout(detector_form_widget)
+        detector_layout.setFieldGrowthPolicy(QFormLayout.ExpandingFieldsGrow)
 
         detector_label = QLabel("Detector Type: MemryX")
         font = QFont("Arial", 12, QFont.Bold)   # size 12, bold
@@ -699,9 +825,11 @@ class ConfigGUI(QWidget):
         self.memryx_devices = QSpinBox()
         self.memryx_devices.setRange(1, max(1, num_devices if num_devices > 0 else 8))
         self.memryx_devices.setValue(num_devices if num_devices > 0 else 1)
+        self.memryx_devices.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
 
         # GroupBox to show available devices
         device_box = QGroupBox("Available Devices")
+        device_box.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         device_layout = QVBoxLayout()
 
         # Detect current theme - using professional color
@@ -771,20 +899,26 @@ class ConfigGUI(QWidget):
         self.custom_group.setCheckable(True)
         self.custom_group.setChecked(False)   # default off
         self.custom_group.toggled.connect(self.toggle_custom_model_mode)
+        self.custom_group.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
 
         # Path row + custom width/height inside the group
         custom_v = QVBoxLayout()
         path_row = QHBoxLayout()
         self.custom_path = QLineEdit("/config/yolo.zip")
+        self.custom_path.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self.browse_btn = QPushButton("Browse")
+        self.browse_btn.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)
         path_row.addWidget(self.custom_path)
         path_row.addWidget(self.browse_btn)
         custom_v.addLayout(path_row)
 
         # Custom width/height spinboxes (enabled only when group is checked)
         self.custom_width = QSpinBox();  self.custom_width.setRange(1, 8192); self.custom_width.setValue(320)
+        self.custom_width.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self.custom_height = QSpinBox(); self.custom_height.setRange(1, 8192); self.custom_height.setValue(320)
+        self.custom_height.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         custom_form = QFormLayout()
+        custom_form.setFieldGrowthPolicy(QFormLayout.ExpandingFieldsGrow)
         custom_form.addRow("Custom Width", self.custom_width)
         custom_form.addRow("Custom Height", self.custom_height)
         custom_v.addLayout(custom_form)
@@ -929,11 +1063,18 @@ class ConfigGUI(QWidget):
         ffmpeg_widget.setLayout(ffmpeg_layout)
         tabs.addTab(ffmpeg_widget, "FFmpeg")
 
-        # --- Camera Tab
+        # --- Camera Tab with Responsive Design ---
         self.camera_tabs = []  # store camera widget sets
 
+        # Create camera tab with scroll area
+        camera_scroll = QScrollArea()
+        camera_scroll.setWidgetResizable(True)
+        camera_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        camera_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        
         cams_tab = QWidget()
         cams_layout = QVBoxLayout(cams_tab)
+        cams_layout.setContentsMargins(5, 5, 5, 5)
 
         # Number of cameras spinbox
         cams_count_layout = QHBoxLayout()
@@ -954,6 +1095,7 @@ class ConfigGUI(QWidget):
                 background-color: #234f60;
             }
         """)
+        setup_guide_btn.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)
         setup_guide_btn.clicked.connect(lambda: CameraSetupDialog(self).exec())
         cams_count_layout.addWidget(setup_guide_btn)
         
@@ -973,16 +1115,24 @@ class ConfigGUI(QWidget):
 
         # Sub-tabs for cameras
         self.cams_subtabs = QTabWidget()
+        self.cams_subtabs.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         cams_layout.addWidget(self.cams_subtabs)
+        
+        # Set camera scroll area
+        camera_scroll.setWidget(cams_tab)
 
         tabs.addTab(detector_widget, "🧠 Detector")
         tabs.addTab(model_widget, "📦 Model")
-        tabs.addTab(cams_tab, "🎥 Cameras")
+        tabs.addTab(camera_scroll, "🎥 Cameras")
         tabs.addTab(ffmpeg_widget, "🎬 FFmpeg")
-        tabs.addTab(mqtt_widget, "🟢 MQTT")
+        tabs.addTab(mqtt_scroll, "🟢 MQTT")
 
         # Build initial camera tabs
-        self.rebuild_camera_tabs(self.cams_count.value())
+        self.camera_tabs = []  # Initialize camera tabs list
+        self.previous_camera_count = 1  # Track previous count for auto-switching
+        
+        # Load existing cameras from config if available (this will rebuild tabs with data)
+        self.load_existing_cameras()
 
         layout.addWidget(tabs)
 
@@ -1033,7 +1183,7 @@ class ConfigGUI(QWidget):
 
         self.setLayout(layout)
 
-        # Load existing configuration if available
+        # Load existing configuration for other settings (non-camera)
         self.load_existing_config()
 
     # -------- helpers for resolution & modes --------
@@ -1096,12 +1246,320 @@ class ConfigGUI(QWidget):
         self.input_dtype.setCurrentText(defaults.get("dtype", "float"))
         self.custom_path.setText(defaults.get("path", "/config/yolo.zip"))
 
+    def load_existing_cameras(self):
+        """Load existing camera configurations from config.yaml if available"""
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        config_path = os.path.join(script_dir, "frigate", "config", "config.yaml")
+        
+        if os.path.exists(config_path):
+            try:
+                with open(config_path, 'r') as f:
+                    config_content = f.read()
+                    
+                # Check if the file is empty
+                if not config_content.strip():
+                    print("Config file is empty, using default configuration")
+                    self.rebuild_camera_tabs(self.cams_count.value())
+                    return
+                
+                # Try parsing with yaml.safe_load
+                try:
+                    config = yaml.safe_load(config_content)
+                except yaml.YAMLError as yaml_error:
+                    print(f"YAML parsing error: {yaml_error}")
+                    self.rebuild_camera_tabs(self.cams_count.value())
+                    return
+                
+                # Check if config is valid and has cameras
+                if config and isinstance(config, dict) and "cameras" in config and config["cameras"]:
+                    cameras = config["cameras"]
+                    
+                    # Validate cameras structure
+                    if isinstance(cameras, dict) and cameras:
+                        # Set camera count to match existing cameras
+                        self.cams_count.setValue(len(cameras))
+                        
+                        # Rebuild tabs with existing camera data
+                        self.rebuild_camera_tabs_with_existing_data(cameras)
+                        return
+                    else:
+                        print("Invalid cameras structure in config file")
+                        
+            except FileNotFoundError:
+                print(f"Config file not found: {config_path}")
+            except PermissionError:
+                print(f"Permission denied reading config file: {config_path}")
+            except Exception as e:
+                print(f"Error loading existing cameras: {e}")
+                traceback.print_exc()
+        
+        # Fallback: build default single camera tab
+        print("Using default camera configuration")
+        self.rebuild_camera_tabs(self.cams_count.value())
+
+    def rebuild_camera_tabs_with_existing_data(self, existing_cameras):
+        """Rebuild camera tabs with existing camera data"""
+        camera_list = list(existing_cameras.items())
+        
+        # Clear existing tabs
+        self.cams_subtabs.clear()
+        self.camera_tabs.clear()
+        
+        for idx, (camera_name, camera_config) in enumerate(camera_list):
+            # Create scroll area for each camera tab
+            cam_scroll = QScrollArea()
+            cam_scroll.setWidgetResizable(True)
+            cam_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+            cam_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+            
+            cam_widget = QWidget()
+            form = QFormLayout(cam_widget)
+            form.setFieldGrowthPolicy(QFormLayout.ExpandingFieldsGrow)
+            form.setRowWrapPolicy(QFormLayout.WrapLongRows)
+            
+            # Extract existing data from config
+            ffmpeg_inputs = camera_config.get("ffmpeg", {}).get("inputs", [])
+            camera_url = ffmpeg_inputs[0].get("path", "") if ffmpeg_inputs else ""
+            
+            # Parse RTSP URL to extract username, password, IP for consistency
+            username = ""
+            password = ""
+            ip_address = ""
+            
+            if camera_url.startswith("rtsp://"):
+                try:
+                    # Parse rtsp://username:password@ip:port/cam/realmonitor?channel=1&subtype=0
+                    url_part = camera_url[7:]  # Remove rtsp://
+                    if "@" in url_part:
+                        auth_part, rest = url_part.split("@", 1)
+                        if ":" in auth_part:
+                            username, password = auth_part.split(":", 1)
+                        if ":" in rest:
+                            ip_address = rest.split(":", 1)[0]
+                        else:
+                            ip_address = rest.split("/")[0]
+                except:
+                    pass  # Keep defaults if parsing fails
+            
+            # Extract roles from inputs
+            roles = ffmpeg_inputs[0].get("roles", []) if ffmpeg_inputs else []
+            role_detect = "detect" in roles
+            role_record = "record" in roles
+            
+            # Extract detect settings
+            detect_config = camera_config.get("detect", {})
+            detect_width = detect_config.get("width", 1280)
+            detect_height = detect_config.get("height", 720)
+            detect_fps = detect_config.get("fps", 5)
+            detect_enabled = detect_config.get("enabled", True)
+            
+            # Extract objects
+            objects_list = camera_config.get("objects", {}).get("track", [])
+            objects_text = ",".join(objects_list) if objects_list else "person,car,dog"
+            
+            # Extract snapshot settings
+            snapshots_config = camera_config.get("snapshots", {})
+            snapshots_enabled = snapshots_config.get("enabled", True)
+            snapshots_bb = snapshots_config.get("bounding_box", True)
+            snapshots_retain = snapshots_config.get("retain", {}).get("default", 14)
+            
+            # Extract recording settings
+            record_config = camera_config.get("record", {})
+            record_enabled = record_config.get("enabled", False)
+            record_alerts_days = record_config.get("alerts", {}).get("retain", {}).get("days", 7)
+            record_detections_days = record_config.get("detections", {}).get("retain", {}).get("days", 3)
+            
+            # Create form fields with existing data
+            camera_name_field = QLineEdit(camera_name)
+            camera_name_field.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+            
+            # Add IP/username/password fields for consistency with rebuild_camera_tabs
+            ip_address_field = QLineEdit(ip_address)
+            ip_address_field.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+            ip_address_field.setPlaceholderText("192.168.1.100")
+            
+            username_field = QLineEdit(username)
+            username_field.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+            username_field.setPlaceholderText("admin")
+            
+            password_field = QLineEdit(password)
+            password_field.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+            password_field.setPlaceholderText("password")
+            
+            camera_url_field = QLineEdit(camera_url)
+            camera_url_field.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+            camera_url_field.setPlaceholderText("rtsp://username:password@ip:port/cam/realmonitor?channel=1&subtype=0")
+            
+            # Camera roles
+            role_detect_field = QCheckBox("Detect")
+            role_detect_field.setChecked(role_detect)
+            role_record_field = QCheckBox("Record")
+            role_record_field.setChecked(role_record)
+            
+            # Detect settings
+            detect_width_field = QSpinBox()
+            detect_width_field.setRange(320, 3840)
+            detect_width_field.setValue(detect_width)
+            detect_width_field.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+            
+            detect_height_field = QSpinBox()
+            detect_height_field.setRange(240, 2160)
+            detect_height_field.setValue(detect_height)
+            detect_height_field.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+            
+            detect_fps_field = QSpinBox()
+            detect_fps_field.setRange(1, 30)
+            detect_fps_field.setValue(detect_fps)
+            detect_fps_field.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+            
+            detect_enabled_field = QCheckBox("Enable Detection")
+            detect_enabled_field.setChecked(detect_enabled)
+            
+            # Objects
+            objects_field = QTextEdit(objects_text)
+            objects_field.setMaximumHeight(80)
+            objects_field.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+            
+            # Snapshots
+            snapshots_enabled_field = QCheckBox("Enable Snapshots")
+            snapshots_enabled_field.setChecked(snapshots_enabled)
+            
+            snapshots_bb_field = QCheckBox("Bounding Box")
+            snapshots_bb_field.setChecked(snapshots_bb)
+            
+            snapshots_retain_field = QSpinBox()
+            snapshots_retain_field.setRange(1, 365)
+            snapshots_retain_field.setValue(snapshots_retain)
+            snapshots_retain_field.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+            
+            # Recording
+            record_enabled_field = QCheckBox("Enable Recording")
+            record_enabled_field.setChecked(record_enabled)
+            
+            record_alerts_field = QSpinBox()
+            record_alerts_field.setRange(0, 365)
+            record_alerts_field.setValue(record_alerts_days)
+            record_alerts_field.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+            
+            record_detections_field = QSpinBox()
+            record_detections_field.setRange(0, 365)
+            record_detections_field.setValue(record_detections_days)
+            record_detections_field.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+            
+            # Layout form with responsive design
+            form.addRow("Camera Name:", camera_name_field)
+            form.addRow("IP Address:", ip_address_field)
+            form.addRow("Username:", username_field)
+            form.addRow("Password:", password_field)
+            form.addRow("Camera URL:", camera_url_field)
+            
+            # Roles layout
+            roles_layout = QHBoxLayout()
+            roles_layout.addWidget(role_detect_field)
+            roles_layout.addWidget(role_record_field)
+            roles_layout.addStretch()
+            form.addRow("Roles:", roles_layout)
+            
+            # Detect settings
+            detect_group = QGroupBox("Detection Settings")
+            detect_layout = QFormLayout(detect_group)
+            detect_layout.addRow("Width:", detect_width_field)
+            detect_layout.addRow("Height:", detect_height_field)
+            detect_layout.addRow("FPS:", detect_fps_field)
+            detect_layout.addRow("", detect_enabled_field)
+            form.addRow(detect_group)
+            
+            form.addRow("Objects to Track:", objects_field)
+            
+            # Snapshots
+            snapshots_group = QGroupBox("Snapshots")
+            snapshots_layout = QFormLayout(snapshots_group)
+            snapshots_layout.addRow("", snapshots_enabled_field)
+            snapshots_layout.addRow("", snapshots_bb_field)
+            snapshots_layout.addRow("Retain (days):", snapshots_retain_field)
+            form.addRow(snapshots_group)
+            
+            # Recording
+            recording_group = QGroupBox("Recording")
+            recording_layout = QFormLayout(recording_group)
+            recording_layout.addRow("", record_enabled_field)
+            recording_layout.addRow("Alert Days:", record_alerts_field)
+            recording_layout.addRow("Detection Days:", record_detections_field)
+            form.addRow(recording_group)
+            
+            # Add delete button (same as in rebuild_camera_tabs)
+            delete_btn = QPushButton("🗑️ Delete Camera")
+            delete_btn.setStyleSheet("""
+                QPushButton {
+                    background-color: #dc3545;
+                    color: white;
+                    border: none;
+                    padding: 10px 20px;
+                    border-radius: 5px;
+                    font-weight: bold;
+                    font-size: 13px;
+                    margin-top: 10px;
+                }
+                QPushButton:hover {
+                    background-color: #c82333;
+                }
+                QPushButton:pressed {
+                    background-color: #bd2130;
+                }
+            """)
+            
+            # Connect delete button with closure to capture current index
+            def create_delete_handler(camera_index):
+                return lambda: self.delete_camera(camera_index)
+            
+            delete_btn.clicked.connect(create_delete_handler(idx))
+            
+            form.addRow("", delete_btn)  # Empty label for the delete button row
+            
+            # Store references
+            cam_data = {
+                "camera_name": camera_name_field,
+                "ip_address": ip_address_field,
+                "username": username_field,
+                "password": password_field,
+                "camera_url": camera_url_field,
+                "role_detect": role_detect_field,
+                "role_record": role_record_field,
+                "detect_width": detect_width_field,
+                "detect_height": detect_height_field,
+                "detect_fps": detect_fps_field,
+                "detect_enabled": detect_enabled_field,
+                "objects": objects_field,
+                "snapshots_enabled": snapshots_enabled_field,
+                "snapshots_bb": snapshots_bb_field,
+                "snapshots_retain": snapshots_retain_field,
+                "record_enabled": record_enabled_field,
+                "record_alerts": record_alerts_field,
+                "record_detections": record_detections_field,
+                "delete_btn": delete_btn,  # Add delete button reference
+            }
+            
+            self.camera_tabs.append(cam_data)
+            
+            # Set scroll area widget and add to tabs
+            cam_scroll.setWidget(cam_widget)
+            
+            # Add tab
+            camera_display_name = camera_name if camera_name else f"Camera {idx + 1}"
+            self.cams_subtabs.addTab(cam_scroll, camera_display_name)
+        
+        # Update delete button visibility after all cameras are loaded
+        self.update_delete_button_visibility()
+
     def rebuild_camera_tabs(self, count: int):
         # Step 1: Save existing values
         saved_data = []
         for cam in self.camera_tabs:
             saved_data.append({
                 "camera_name": cam["camera_name"].text(),
+                "ip_address": cam["ip_address"].text(),
+                "username": cam["username"].text(), 
+                "password": cam["password"].text(),
                 "camera_url": cam["camera_url"].text(),
                 "role_detect": cam["role_detect"].isChecked(),
                 "role_record": cam["role_record"].isChecked(),
@@ -1135,17 +1593,247 @@ class ConfigGUI(QWidget):
                 pass
 
         for idx in range(count):
+            # Create scroll area for each camera tab
+            cam_scroll = QScrollArea()
+            cam_scroll.setWidgetResizable(True)
+            cam_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+            cam_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+            
             cam_widget = QWidget()
             form = QFormLayout(cam_widget)
+            form.setFieldGrowthPolicy(QFormLayout.ExpandingFieldsGrow)
+            form.setRowWrapPolicy(QFormLayout.WrapLongRows)
+            form.setContentsMargins(10, 10, 10, 10)
+            form.setSpacing(8)
 
             # Restore data if exists, else defaults
             data = saved_data[idx] if idx < len(saved_data) else {}
 
-            # Use camera name from config if available, otherwise use default
-            default_name = camera_names[idx] if idx < len(camera_names) else f"camera_{idx+1}"
-            camera_name = QLineEdit(data.get("camera_name", default_name))
-            camera_url = QLineEdit(data.get("camera_url", "rtsp://..."))
-
+            # Prioritize saved camera name, then config, then default
+            if data.get("camera_name"):
+                # Use saved camera name if available
+                camera_name_text = data["camera_name"]
+            else:
+                # Fall back to config name or default
+                camera_name_text = camera_names[idx] if idx < len(camera_names) else f"camera_{idx+1}"
+            
+            camera_name = QLineEdit(camera_name_text)
+            camera_name.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+            
+            # Enhanced camera connection fields (IP, Username, Password first)
+            ip_address = QLineEdit(data.get("ip_address", ""))
+            ip_address.setPlaceholderText("192.168.1.100")
+            ip_address.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+            
+            username = QLineEdit(data.get("username", ""))
+            username.setPlaceholderText("admin")
+            username.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+            
+            password = QLineEdit(data.get("password", ""))
+            # password.setEchoMode(QLineEdit.Password)  # Remove password hiding
+            password.setPlaceholderText("password")
+            password.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+            
+            # Camera URL field (now auto-generated)
+            camera_url = QLineEdit(data.get("camera_url", ""))
+            camera_url.setPlaceholderText("Auto-generated RTSP URL will appear here")
+            camera_url.setEnabled(False)  # Disabled by default for auto-generation
+            camera_url.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+            
+            # Discover Camera button (will be placed next to IP address)
+            discover_btn = QPushButton("🔍 Discover Camera")
+            discover_btn.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)
+            discover_btn.setStyleSheet("""
+                QPushButton {
+                    background-color: #2196f3;
+                    color: white;
+                    border: none;
+                    padding: 8px 16px;
+                    border-radius: 5px;
+                    font-weight: bold;
+                    font-size: 13px;
+                }
+                QPushButton:hover {
+                    background-color: #1976d2;
+                }
+                QPushButton:pressed {
+                    background-color: #0d47a1;
+                }
+            """)
+            
+            # IP Address layout with Discover button
+            ip_layout = QHBoxLayout()
+            ip_layout.addWidget(ip_address)
+            ip_layout.addWidget(discover_btn)
+            ip_layout.setSpacing(10)
+            ip_widget = QWidget()
+            ip_widget.setLayout(ip_layout)
+            
+            # Manual URL toggle (will be placed near Camera URL field)
+            manual_url_btn = QPushButton("✏️ Manual URL")
+            manual_url_btn.setCheckable(True)
+            manual_url_btn.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)
+            manual_url_btn.setStyleSheet("""
+                QPushButton {
+                    background-color: #ff9800;
+                    color: white;
+                    border: none;
+                    padding: 8px 16px;
+                    border-radius: 5px;
+                    font-weight: bold;
+                    font-size: 13px;
+                }
+                QPushButton:hover {
+                    background-color: #f57c00;
+                }
+                QPushButton:checked {
+                    background-color: #e65100;
+                }
+            """)
+            
+            # Camera URL layout with Manual URL button
+            camera_url_layout = QHBoxLayout()
+            camera_url_layout.addWidget(camera_url)
+            camera_url_layout.addWidget(manual_url_btn)
+            camera_url_layout.setSpacing(10)
+            camera_url_widget = QWidget()
+            camera_url_widget.setLayout(camera_url_layout)
+            
+            # Hidden manufacturer selection (for unknown manufacturers)
+            manufacturer_frame = QFrame()
+            manufacturer_frame.hide()
+            manufacturer_frame.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)  # Allow horizontal expansion
+            manufacturer_frame.setStyleSheet("""
+                QFrame {
+                    background-color: #fff3cd;
+                    border: 2px solid #ffeaa7;
+                    border-radius: 10px;
+                    padding: 20px;
+                    margin: 10px 0;
+                }
+            """)
+            manufacturer_layout = QVBoxLayout(manufacturer_frame)
+            manufacturer_layout.setSpacing(15)
+            manufacturer_layout.setContentsMargins(20, 20, 20, 20)
+            
+            manufacturer_label = QLabel("🏢 Manufacturer not detected automatically. Please select:")
+            manufacturer_label.setStyleSheet("""
+                QLabel {
+                    font-weight: bold; 
+                    color: #856404;
+                    font-size: 14px;
+                    margin-bottom: 8px;
+                    padding: 5px;
+                }
+            """)
+            
+            manufacturer_combo = QComboBox()
+            manufacturer_combo.addItems([
+                "Select manufacturer...",
+                "Hikvision", "Dahua", "Amcrest", "Reolink", 
+                "Axis", "Foscam", "Vivotek", "Bosch", 
+                "Sony", "Uniview", "-- None of the above --"
+            ])
+            manufacturer_combo.setMinimumWidth(400)  # Increased width for full text visibility
+            manufacturer_combo.setMinimumHeight(35)  # Ensure proper height
+            manufacturer_combo.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)  # Allow horizontal expansion
+            manufacturer_combo.setSizeAdjustPolicy(QComboBox.AdjustToContents)  # Auto-adjust to content
+            manufacturer_combo.setStyleSheet("""
+                QComboBox {
+                    padding: 10px 15px;
+                    border: 2px solid #ddd;
+                    border-radius: 8px;
+                    background: white;
+                    min-height: 30px;
+                    min-width: 400px;
+                    font-size: 14px;
+                    font-weight: 500;
+                }
+                QComboBox:focus {
+                    border: 2px solid #2c6b7d;
+                    background: #f8f9fa;
+                }
+                QComboBox::drop-down {
+                    border: none;
+                    width: 25px;
+                    padding-right: 5px;
+                }
+                QComboBox::down-arrow {
+                    image: none;
+                    border-left: 6px solid transparent;
+                    border-right: 6px solid transparent;
+                    border-top: 8px solid #666;
+                    width: 0;
+                    height: 0;
+                    margin-right: 5px;
+                }
+                QComboBox QAbstractItemView {
+                    background-color: white;
+                    border: 2px solid #ddd;
+                    border-radius: 5px;
+                    selection-background-color: #2c6b7d;
+                    selection-color: white;
+                    outline: none;
+                    min-width: 400px;
+                    padding: 5px;
+                }
+                QComboBox QAbstractItemView::item {
+                    padding: 12px 15px;
+                    border-bottom: 1px solid #eee;
+                    min-height: 25px;
+                    font-size: 14px;
+                }
+                QComboBox QAbstractItemView::item:hover {
+                    background-color: #f0f8ff;
+                    color: #2c6b7d;
+                }
+                QComboBox QAbstractItemView::item:selected {
+                    background-color: #2c6b7d;
+                    color: white;
+                }
+            """)
+            
+            manufacturer_layout.addWidget(manufacturer_label)
+            manufacturer_layout.addWidget(manufacturer_combo)
+            
+            # Manual URL section (hidden by default) - reusing proven code from simple_camera_gui.py
+            manual_url_section = QFrame()
+            manual_url_section.setStyleSheet("""
+                QFrame {
+                    background-color: #f8f9fa;
+                    border: 1px solid #dee2e6;
+                    border-radius: 4px;
+                    padding: 8px;
+                    margin-top: 5px;
+                }
+            """)
+            manual_url_layout = QVBoxLayout(manual_url_section)
+            manual_url_header = QLabel("✏️ Enter Custom Camera URL:")
+            manual_url_header.setStyleSheet("font-weight: bold; color: #495057; font-size: 14px;")
+            manual_url_layout.addWidget(manual_url_header)
+            
+            custom_url_field = QLineEdit()
+            custom_url_field.setPlaceholderText("rtsp://username:password@ip:554/your/camera/path")
+            custom_url_field.setStyleSheet("""
+                QLineEdit {
+                    padding: 6px 10px;
+                    border: 1px solid #ced4da;
+                    border-radius: 4px;
+                    font-family: monospace;
+                }
+            """)
+            manual_url_layout.addWidget(custom_url_field)
+            manual_url_section.hide()  # Hidden by default
+            manufacturer_layout.addWidget(manual_url_section)
+            
+            # Store references for easy access
+            camera_url.manufacturer_selection_frame = manufacturer_frame
+            camera_url.manufacturer_combo = manufacturer_combo
+            camera_url.manual_url_section = manual_url_section
+            camera_url.custom_url_field = custom_url_field
+            camera_url.manual_url_header = manual_url_header
+            
+            # Other form fields
             role_detect = QCheckBox("Detect")
             role_detect.setChecked(data.get("role_detect", True))
             role_record = QCheckBox("Record")
@@ -1166,22 +1854,26 @@ class ConfigGUI(QWidget):
 
             snapshots_enabled = QCheckBox(); snapshots_enabled.setChecked(data.get("snapshots_enabled", False))
             snapshots_bb = QCheckBox(); snapshots_bb.setChecked(data.get("snapshots_bb", True))
-            snapshots_retain = QSpinBox(); snapshots_retain.setRange(1, 1000)
-            snapshots_retain.setValue(data.get("snapshots_retain", 1))
+            snapshots_retain = QSpinBox(); snapshots_retain.setRange(0, 1000)
+            snapshots_retain.setValue(data.get("snapshots_retain", 0))
 
             record_enabled = QCheckBox(); record_enabled.setChecked(data.get("record_enabled", False))
-            record_alerts = QSpinBox(); record_alerts.setRange(1, 1000)
-            record_alerts.setValue(data.get("record_alerts", 1))
-            record_detections = QSpinBox(); record_detections.setRange(1, 1000)
-            record_detections.setValue(data.get("record_detections", 1))
+            record_alerts = QSpinBox(); record_alerts.setRange(0, 1000)
+            record_alerts.setValue(data.get("record_alerts", 0))
+            record_detections = QSpinBox(); record_detections.setRange(0, 1000)
+            record_detections.setValue(data.get("record_detections", 0))
 
-            # Layout form
+            # Layout form with enhanced camera fields
             form.addRow("Camera Name", camera_name)
-            form.addRow("Camera URL", camera_url)
+            form.addRow("IP Address", ip_widget)  # IP address with discover button
+            form.addRow("Username", username)
+            form.addRow("Password", password)
+            form.addRow("Manufacturer", manufacturer_frame)  # Manufacturer selection with proper label
+            form.addRow("Camera URL", camera_url_widget)  # Camera URL with manual URL button
             
             # RTSP info note
             rtsp_note = QLabel(
-                "ℹ️ RTSP URL format: rtsp://username:password@ip:port/path"
+                "ℹ️ Use 'Discover Camera' for automatic setup, or toggle 'Manual URL' for custom RTSP URLs"
             )
             rtsp_note.setWordWrap(True)
             rtsp_note.setStyleSheet("""
@@ -1220,6 +1912,89 @@ class ConfigGUI(QWidget):
             form.addRow("Record Alerts Retain (days)", record_alerts)
             form.addRow("Record Detections Retain (days)", record_detections)
 
+            # Add delete button (only show if more than 1 camera)
+            delete_btn = QPushButton("🗑️ Delete Camera")
+            delete_btn.setStyleSheet("""
+                QPushButton {
+                    background-color: #dc3545;
+                    color: white;
+                    border: none;
+                    padding: 10px 20px;
+                    border-radius: 5px;
+                    font-weight: bold;
+                    font-size: 13px;
+                    margin-top: 10px;
+                }
+                QPushButton:hover {
+                    background-color: #c82333;
+                }
+                QPushButton:pressed {
+                    background-color: #bd2130;
+                }
+            """)
+            
+            # Connect delete button with closure to capture current index
+            def create_delete_handler(camera_index):
+                return lambda: self.delete_camera(camera_index)
+            
+            delete_btn.clicked.connect(create_delete_handler(idx))
+            
+            form.addRow("", delete_btn)  # Empty label for the delete button row
+
+            # Enhanced Signal Connections for Auto URL Generation
+            def setup_field_connections():
+                """Setup signal connections for auto URL generation"""
+                # Connect discover button
+                discover_btn.clicked.connect(lambda: self.discover_camera(ip_address, username, password, camera_url))
+                
+                # Connect manual URL toggle
+                manual_url_btn.toggled.connect(lambda checked: self.toggle_manual_url(camera_url, checked))
+                
+                # Connect manufacturer selection with proper closure
+                def on_manufacturer_changed(text):
+                    """Handle manufacturer selection with proper variable capture"""
+                    try:
+                        self.on_manufacturer_selected(text, ip_address, username, password, camera_url, manufacturer_frame)
+                    except Exception as e:
+                        print(f"Error in manufacturer selection: {e}")
+                
+                manufacturer_combo.currentTextChanged.connect(on_manufacturer_changed)
+                
+                # Also connect via currentIndexChanged for better reliability
+                def on_manufacturer_index_changed(index):
+                    """Handle manufacturer selection by index"""
+                    try:
+                        text = manufacturer_combo.itemText(index)
+                        if text and text != "Select manufacturer...":
+                            self.on_manufacturer_selected(text, ip_address, username, password, camera_url, manufacturer_frame)
+                    except Exception as e:
+                        print(f"Error in manufacturer index selection: {e}")
+                
+                manufacturer_combo.currentIndexChanged.connect(on_manufacturer_index_changed)
+                
+                # Connect custom URL field changes
+                def on_custom_url_changed():
+                    """Handle custom URL field changes"""
+                    try:
+                        if hasattr(camera_url, 'custom_url_field'):
+                            custom_text = camera_url.custom_url_field.text().strip()
+                            if custom_text:
+                                camera_url.setText(custom_text)
+                                camera_url.setEnabled(True)  # Enable manual mode
+                    except Exception as e:
+                        print(f"Error in custom URL change: {e}")
+                
+                # Connect the custom URL field if it exists
+                if hasattr(camera_url, 'custom_url_field'):
+                    camera_url.custom_url_field.textChanged.connect(on_custom_url_changed)
+                
+                # Connect field changes for auto URL generation
+                ip_address.textChanged.connect(lambda: self.update_rtsp_url(ip_address, username, password, camera_url))
+                username.textChanged.connect(lambda: self.update_rtsp_url(ip_address, username, password, camera_url))
+                password.textChanged.connect(lambda: self.update_rtsp_url(ip_address, username, password, camera_url))
+            
+            setup_field_connections()
+
             # Add dynamic tab name update
             def update_tab_name():
                 new_name = camera_name.text()
@@ -1232,9 +2007,12 @@ class ConfigGUI(QWidget):
             cam_name = camera_name.text()
             self.cams_subtabs.addTab(cam_widget, cam_name)
 
-            # Save refs
+            # Save refs (including new fields)
             self.camera_tabs.append({
                 "camera_name": camera_name,
+                "ip_address": ip_address,
+                "username": username,
+                "password": password,
                 "camera_url": camera_url,
                 "role_detect": role_detect,
                 "role_record": role_record,
@@ -1249,86 +2027,553 @@ class ConfigGUI(QWidget):
                 "record_enabled": record_enabled,
                 "record_alerts": record_alerts,
                 "record_detections": record_detections,
+                "delete_btn": delete_btn,  # Add delete button reference
             })
+        
+        # Auto-switch to the last tab if camera count increased
+        if count > self.previous_camera_count:
+            # Switch to the last (newest) camera tab
+            last_tab_index = self.cams_subtabs.count() - 1
+            if last_tab_index >= 0:
+                self.cams_subtabs.setCurrentIndex(last_tab_index)
+        
+        # Update delete button visibility for all cameras
+        self.update_delete_button_visibility()
+        
+        # Update previous count for next comparison
+        self.previous_camera_count = count
+
+    def update_delete_button_visibility(self):
+        """Update visibility of delete buttons based on camera count"""
+        show_delete = len(self.camera_tabs) > 1
+        for cam in self.camera_tabs:
+            if "delete_btn" in cam:
+                cam["delete_btn"].setVisible(show_delete)
+
+    def delete_camera(self, camera_index):
+        """Delete a camera with confirmation dialog"""
+        if len(self.camera_tabs) <= 1:
+            QMessageBox.warning(self, "Cannot Delete", 
+                              "Cannot delete the last camera. At least one camera is required.")
+            return
+        
+        # Get camera name for confirmation dialog
+        camera_name = "Unknown"
+        if camera_index < len(self.camera_tabs):
+            camera_name = self.camera_tabs[camera_index]["camera_name"].text()
+        
+        # Confirmation dialog
+        reply = QMessageBox.question(
+            self,
+            "Delete Camera",
+            f"Are you sure you want to delete camera '{camera_name}'?\n\nThis action cannot be undone.",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No
+        )
+        
+        if reply == QMessageBox.Yes:
+            # Decrease camera count (this will trigger rebuild_camera_tabs)
+            current_count = self.cams_count.value()
+            if current_count > 1:
+                self.cams_count.setValue(current_count - 1)
+
+    # Enhanced Camera Discovery Methods - Reusing code from simple_camera_gui.py
+    def discover_camera(self, ip_field, username_field, password_field, url_field):
+        """Launch ONVIF camera discovery dialog"""
+        if not ONVIF_AVAILABLE:
+            QMessageBox.warning(self, "ONVIF Not Available", 
+                              "ONVIF discovery is not available. Please ensure simple_camera_gui.py is in the same directory.")
+            return
+            
+        dialog = ONVIFDiscoveryDialog(self)  # Use the correct class name
+        
+        # Connect the selection signal to handle discovered camera
+        dialog.camera_selected.connect(lambda camera_info: self.on_camera_discovered(
+            camera_info, ip_field, username_field, password_field, url_field
+        ))
+        
+        dialog.exec()
+
+    def on_camera_discovered(self, camera_info, ip_field, username_field, password_field, url_field):
+        """Handle discovered camera from ONVIF - reusing logic from simple_camera_gui.py"""
+        try:
+            # Always use fallback to avoid compatibility issues with different GUI structures
+            self._fallback_on_camera_discovered(camera_info, ip_field, username_field, password_field, url_field)
+            
+        except Exception as e:
+            QMessageBox.warning(self, "Discovery Error", f"Error processing discovered camera:\n{str(e)}")
+
+    def _fallback_on_camera_discovered(self, camera_info, ip_field, username_field, password_field, url_field):
+        """Fallback implementation for camera discovery handling"""
+        try:
+            # Temporarily block signals to prevent crashes during programmatic updates
+            ip_field.blockSignals(True)
+            username_field.blockSignals(True)
+            password_field.blockSignals(True)
+            
+            # Fill in the discovered camera information
+            ip_field.setText(camera_info['ip'])
+            
+            # Store manufacturer info for later URL generation
+            if hasattr(ip_field, 'setProperty'):
+                ip_field.setProperty('discovered_manufacturer', camera_info.get('manufacturer', 'Unknown'))
+                ip_field.setProperty('rtsp_patterns', camera_info.get('rtsp_patterns', {}))
+            
+            # Also store on username and password fields for better access
+            if hasattr(username_field, 'setProperty'):
+                username_field.setProperty('discovered_manufacturer', camera_info.get('manufacturer', 'Unknown'))
+                username_field.setProperty('rtsp_patterns', camera_info.get('rtsp_patterns', {}))
+            if hasattr(password_field, 'setProperty'):
+                password_field.setProperty('discovered_manufacturer', camera_info.get('manufacturer', 'Unknown'))
+                password_field.setProperty('rtsp_patterns', camera_info.get('rtsp_patterns', {}))
+            
+            # Re-enable signals
+            ip_field.blockSignals(False)
+            username_field.blockSignals(False)
+            password_field.blockSignals(False)
+            
+            # Show manufacturer-specific info in the message
+            manufacturer_info = ""
+            if camera_info.get('manufacturer', 'Unknown') != 'Unknown':
+                manufacturer_info = f"\nManufacturer: {camera_info['manufacturer']}"
+                if 'rtsp_patterns' in camera_info and camera_info['rtsp_patterns'].get('manufacturer_detected'):
+                    manufacturer_info += "\n✅ Manufacturer-specific RTSP URL will be used"
+            
+            # If we discovered additional info, show a message
+            QMessageBox.information(
+                self, "Camera Discovered", 
+                f"📹 Camera discovered successfully!\n\n"
+                f"IP Address: {camera_info['ip']}\n"
+                f"Name: {camera_info['name']}\n"
+                f"Model: {camera_info['model']}{manufacturer_info}\n\n"
+                "Please enter your camera username and password to complete the setup."
+            )
+            
+            # Focus on username field for user input
+            username_field.setFocus()
+            
+            # Handle manufacturer selection UI based on detection results
+            if camera_info.get('manufacturer', 'Unknown') == 'Unknown':
+                # Show manufacturer selection UI for unknown manufacturers
+                if hasattr(url_field, 'manufacturer_selection_frame'):
+                    url_field.manufacturer_selection_frame.show()
+                    url_field.manufacturer_combo.setCurrentIndex(0)  # Reset to default
+            else:
+                # Hide manufacturer selection UI for known manufacturers
+                if hasattr(url_field, 'manufacturer_selection_frame'):
+                    url_field.manufacturer_selection_frame.hide()
+                    
+                # Trigger URL update if we have manufacturer info and credentials are filled
+                if hasattr(username_field, 'text') and hasattr(password_field, 'text'):
+                    # Small delay to ensure properties are set
+                    QTimer.singleShot(100, lambda: self.trigger_url_update_if_ready(username_field, password_field, ip_field, url_field))
+            
+        except Exception as e:
+            # Re-enable signals in case of error
+            try:
+                ip_field.blockSignals(False)
+                username_field.blockSignals(False)
+                password_field.blockSignals(False)
+            except:
+                pass
+            QMessageBox.warning(self, "Discovery Error", f"Error processing discovered camera:\n{str(e)}")
+
+    def trigger_url_update_if_ready(self, username_field, password_field, ip_field, url_field):
+        """Trigger URL update if all fields are ready"""
+        try:
+            # Check if we have credentials and the URL field is in auto-generate mode
+            if (not url_field.isEnabled() and 
+                username_field.text().strip() and 
+                password_field.text().strip() and 
+                ip_field.text().strip()):
+                
+                # Get manufacturer info
+                manufacturer = username_field.property('discovered_manufacturer')
+                rtsp_patterns = username_field.property('rtsp_patterns')
+                
+                if manufacturer and rtsp_patterns and rtsp_patterns.get('manufacturer_detected'):
+                    # Generate manufacturer-specific URL
+                    rtsp_info = self.generate_manufacturer_rtsp_url(
+                        ip_field.text().strip(), 
+                        manufacturer, 
+                        username_field.text().strip(), 
+                        password_field.text().strip()
+                    )
+                    url_field.setText(rtsp_info['default_url'])
+        except Exception as e:
+            print(f"Error in trigger_url_update_if_ready: {e}")
+
+    def toggle_manual_url(self, url_field, manual_mode):
+        """Toggle between auto-generated and manual URL entry"""
+        if manual_mode:
+            url_field.setEnabled(True)
+            url_field.setPlaceholderText("Enter your custom RTSP URL here...")
+            url_field.setStyleSheet("background-color: #fff3cd; border: 1px solid #ffeaa7;")
+        else:
+            url_field.setEnabled(False)
+            url_field.setPlaceholderText("Auto-generated RTSP URL will appear here")
+            url_field.setStyleSheet("")
+
+    def on_manufacturer_selected(self, manufacturer_text, ip_field, username_field, password_field, url_field, manufacturer_frame):
+        """Handle manual manufacturer selection for unknown cameras"""
+        try:
+            if manufacturer_text == "-- None of the above --":
+                # Show manual URL section for custom input
+                if hasattr(url_field, 'manual_url_section'):
+                    url_field.manual_url_section.show()
+                    url_field.custom_url_field.setFocus()
+                    url_field.setEnabled(False)  # Disable auto URL
+                    print("Manual URL section shown for custom input")
+                    
+            elif manufacturer_text and manufacturer_text not in ["Select manufacturer...", "-- Select Camera Brand --"]:
+                # Auto-generate URL for selected manufacturer
+                if hasattr(url_field, 'manual_url_section'):
+                    url_field.manual_url_section.hide()  # Hide manual section
+                
+                # Store the manually selected manufacturer
+                if hasattr(username_field, 'setProperty'):
+                    username_field.setProperty('discovered_manufacturer', manufacturer_text)
+                    
+                    # Generate RTSP patterns for this manufacturer
+                    rtsp_info = self.generate_manufacturer_rtsp_url(
+                        ip_field.text().strip() if ip_field.text().strip() else "192.168.1.100",
+                        manufacturer_text, 
+                        username_field.text().strip() if username_field.text().strip() else "admin",
+                        password_field.text().strip() if password_field.text().strip() else "password"
+                    )
+                    username_field.setProperty('rtsp_patterns', rtsp_info)
+                
+                # Generate URL if we have at least an IP
+                if ip_field.text().strip():
+                    rtsp_info = self.generate_manufacturer_rtsp_url(
+                        ip_field.text().strip(),
+                        manufacturer_text,
+                        username_field.text().strip() if username_field.text().strip() else "admin",
+                        password_field.text().strip() if password_field.text().strip() else "password"
+                    )
+                    url_field.setText(rtsp_info['default_url'])
+                    url_field.setEnabled(False)  # Keep auto-generated
+                    
+                    # Hide the manufacturer selection frame since we now have a manufacturer
+                    manufacturer_frame.hide()
+                    
+                    # Show success message
+                    QMessageBox.information(
+                        self, "Manufacturer Selected",
+                        f"✅ Manufacturer set to: {manufacturer_text}\n"
+                        f"🔗 RTSP URL generated: {rtsp_info['default_url']}\n\n"
+                        "The camera URL has been automatically configured for your camera."
+                    )
+                else:
+                    url_field.setText("")
+                    QMessageBox.warning(
+                        self, "IP Address Required",
+                        "Please enter the camera IP address first to generate the RTSP URL."
+                    )
+            else:
+                # Reset state for default selection
+                if hasattr(url_field, 'manual_url_section'):
+                    url_field.manual_url_section.hide()
+                url_field.setText("")
+                
+        except Exception as e:
+            print(f"Error in manufacturer selection: {e}")
+            traceback.print_exc()
+            QMessageBox.warning(self, "Selection Error", f"Error processing manufacturer selection:\n{str(e)}")
+
+    def update_rtsp_url(self, ip_field, username_field, password_field, url_field):
+        """Update RTSP URL when IP/username/password changes"""
+        try:
+            # Only update if URL field is in auto-generate mode
+            if (url_field.isEnabled()):
+                return
+                
+            # Check if all required fields are filled
+            ip_text = ip_field.text().strip()
+            username_text = username_field.text().strip() 
+            password_text = password_field.text().strip()
+            
+            if (not ip_text or not username_text or not password_text):
+                return
+                
+            # Get manufacturer info from stored properties
+            manufacturer = username_field.property('discovered_manufacturer')
+            rtsp_patterns = username_field.property('rtsp_patterns')
+            
+            if manufacturer and manufacturer != 'Unknown':
+                # Generate manufacturer-specific URL
+                rtsp_info = self.generate_manufacturer_rtsp_url(
+                    ip_text, manufacturer, username_text, password_text
+                )
+                url_field.setText(rtsp_info['default_url'])
+                
+                # Hide manufacturer selection if it was shown
+                if hasattr(url_field, 'manufacturer_selection_frame'):
+                    url_field.manufacturer_selection_frame.hide()
+            else:
+                # Show manufacturer selection for unknown manufacturers
+                if hasattr(url_field, 'manufacturer_selection_frame'):
+                    frame = url_field.manufacturer_selection_frame
+                    combo = url_field.manufacturer_combo
+                    
+                    # Reset the combo to default selection
+                    combo.setCurrentIndex(0)
+                    
+                    # Show the frame and ensure proper visibility
+                    frame.show()
+                    frame.setVisible(True)
+                    frame.raise_()  # Bring to front
+                    
+                    # Ensure the combo box is properly sized and visible
+                    combo.setVisible(True)
+                    combo.raise_()
+                    combo.adjustSize()
+                    
+                    # Force layout updates at multiple levels including form row
+                    frame.updateGeometry()
+                    parent_widget = frame.parent()
+                    if parent_widget:
+                        parent_widget.updateGeometry()
+                        parent_widget.update()
+                        
+                        # If it's in a form layout, ensure the row is visible
+                        parent_layout = parent_widget.layout()
+                        if parent_layout:
+                            parent_layout.update()
+                    
+                    # Force a repaint
+                    frame.repaint()
+                    
+                    print(f"Manufacturer selection shown - frame visible: {frame.isVisible()}, combo visible: {combo.isVisible()}")  # Debug
+                    
+        except Exception as e:
+            print(f"Error updating RTSP URL: {e}")
+            import traceback
+            traceback.print_exc()
+
+    def generate_manufacturer_rtsp_url(self, ip_address, manufacturer, username="admin", password="password"):
+        """Generate manufacturer-specific RTSP URL patterns - reusing from simple_camera_gui.py"""
+        try:
+            # Try to import and use the method from simple_camera_gui.py
+            from simple_camera_gui import SimpleCameraGUI
+            temp_gui = SimpleCameraGUI()
+            return temp_gui.generate_manufacturer_rtsp_url(ip_address, manufacturer, username, password)
+        except ImportError:
+            # Fallback to local implementation
+            return self._fallback_generate_manufacturer_rtsp_url(ip_address, manufacturer, username, password)
+
+    def _fallback_generate_manufacturer_rtsp_url(self, ip_address, manufacturer, username="admin", password="password"):
+        """Generate manufacturer-specific RTSP URL patterns"""
+        try:
+            manufacturer_lower = manufacturer.lower()
+            
+            # Manufacturer-specific RTSP URL patterns
+            rtsp_patterns = {
+                'hikvision': {
+                    'main_stream': f'rtsp://{username}:{password}@{ip_address}:554/Streaming/Channels/101',
+                    'sub_stream': f'rtsp://{username}:{password}@{ip_address}:554/Streaming/Channels/102',
+                    'default': f'rtsp://{username}:{password}@{ip_address}:554/h264/ch1/main/av_stream'
+                },
+                'dahua': {
+                    'main_stream': f'rtsp://{username}:{password}@{ip_address}:554/cam/realmonitor?channel=1&subtype=0',
+                    'sub_stream': f'rtsp://{username}:{password}@{ip_address}:554/cam/realmonitor?channel=1&subtype=1',
+                    'default': f'rtsp://{username}:{password}@{ip_address}:554/cam/realmonitor?channel=1&subtype=0'
+                },
+                'amcrest': {
+                    'main_stream': f'rtsp://{username}:{password}@{ip_address}:554/cam/realmonitor?channel=1&subtype=0',
+                    'sub_stream': f'rtsp://{username}:{password}@{ip_address}:554/cam/realmonitor?channel=1&subtype=1', 
+                    'default': f'rtsp://{username}:{password}@{ip_address}:554/cam/realmonitor?channel=1&subtype=0'
+                },
+                'reolink': {
+                    'main_stream': f'rtsp://{username}:{password}@{ip_address}:554/h264Preview_01_main',
+                    'sub_stream': f'rtsp://{username}:{password}@{ip_address}:554/h264Preview_01_sub',
+                    'default': f'rtsp://{username}:{password}@{ip_address}:554/h264Preview_01_main'
+                },
+                'axis': {
+                    'main_stream': f'rtsp://{username}:{password}@{ip_address}:554/axis-media/media.amp',
+                    'sub_stream': f'rtsp://{username}:{password}@{ip_address}:554/axis-media/media.amp?resolution=320x240',
+                    'default': f'rtsp://{username}:{password}@{ip_address}:554/axis-media/media.amp'
+                },
+                'foscam': {
+                    'main_stream': f'rtsp://{username}:{password}@{ip_address}:554/videoMain',
+                    'sub_stream': f'rtsp://{username}:{password}@{ip_address}:554/videoSub',
+                    'default': f'rtsp://{username}:{password}@{ip_address}:554/videoMain'
+                },
+                'vivotek': {
+                    'main_stream': f'rtsp://{username}:{password}@{ip_address}:554/live.sdp',
+                    'sub_stream': f'rtsp://{username}:{password}@{ip_address}:554/live2.sdp',
+                    'default': f'rtsp://{username}:{password}@{ip_address}:554/live.sdp'
+                },
+                'bosch': {
+                    'main_stream': f'rtsp://{username}:{password}@{ip_address}:554/rtsp_tunnel',
+                    'sub_stream': f'rtsp://{username}:{password}@{ip_address}:554/rtsp_tunnel?inst=2',
+                    'default': f'rtsp://{username}:{password}@{ip_address}:554/rtsp_tunnel'
+                },
+                'sony': {
+                    'main_stream': f'rtsp://{username}:{password}@{ip_address}:554/media/video1',
+                    'sub_stream': f'rtsp://{username}:{password}@{ip_address}:554/media/video2', 
+                    'default': f'rtsp://{username}:{password}@{ip_address}:554/media/video1'
+                },
+                'uniview': {
+                    'main_stream': f'rtsp://{username}:{password}@{ip_address}:554/media/video1',
+                    'sub_stream': f'rtsp://{username}:{password}@{ip_address}:554/media/video2',
+                    'default': f'rtsp://{username}:{password}@{ip_address}:554/media/video1'
+                }
+            }
+            
+            # Check for exact manufacturer match
+            for mfr_key, patterns in rtsp_patterns.items():
+                if mfr_key in manufacturer_lower:
+                    return {
+                        'main_stream': patterns['main_stream'],
+                        'sub_stream': patterns['sub_stream'], 
+                        'default_url': patterns['default'],
+                        'manufacturer_detected': True
+                    }
+            
+            # Generic fallback for unknown manufacturers
+            generic_patterns = [
+                f'rtsp://{username}:{password}@{ip_address}:554/stream1',
+                f'rtsp://{username}:{password}@{ip_address}:554/live',
+                f'rtsp://{username}:{password}@{ip_address}:554/media/video1'
+            ]
+            
+            return {
+                'main_stream': generic_patterns[0],
+                'sub_stream': generic_patterns[0],
+                'default_url': generic_patterns[0],
+                'manufacturer_detected': False,
+                'alternatives': generic_patterns
+            }
+            
+        except Exception:
+            # Ultimate fallback
+            return {
+                'main_stream': f'rtsp://{username}:{password}@{ip_address}:554/live',
+                'sub_stream': f'rtsp://{username}:{password}@{ip_address}:554/live',
+                'default_url': f'rtsp://{username}:{password}@{ip_address}:554/live',
+                'manufacturer_detected': False
+            }
 
     def save_config(self):
-        # --- MQTT ---
-        mqtt_config = {
-            "enabled": self.mqtt_enabled.isChecked()
-        }
-        if self.mqtt_enabled.isChecked():
-            mqtt_config["host"] = self.mqtt_host.text()
-            if self.mqtt_port.text():
-                mqtt_config["port"] = int(self.mqtt_port.text())
-            if self.mqtt_topic.text():
-                mqtt_config["topic_prefix"] = self.mqtt_topic.text()
+        try:
+            # --- MQTT ---
+            mqtt_config = {
+                "enabled": self.mqtt_enabled.isChecked() if hasattr(self, 'mqtt_enabled') and self.mqtt_enabled else False
+            }
+            if hasattr(self, 'mqtt_enabled') and self.mqtt_enabled and self.mqtt_enabled.isChecked():
+                if hasattr(self, 'mqtt_host') and self.mqtt_host:
+                    mqtt_config["host"] = self.mqtt_host.text()
+                if hasattr(self, 'mqtt_port') and self.mqtt_port and self.mqtt_port.text():
+                    mqtt_config["port"] = int(self.mqtt_port.text())
+                if hasattr(self, 'mqtt_topic') and self.mqtt_topic and self.mqtt_topic.text():
+                    mqtt_config["topic_prefix"] = self.mqtt_topic.text()
+        except Exception as e:
+            print(f"Error in MQTT config: {e}")
+            mqtt_config = {"enabled": False}
 
         # --- FFmpeg ---
-        ffmpeg_config = {}
-        if self.ffmpeg_group.isChecked():
-            ffmpeg_config["hwaccel_args"] = self.ffmpeg_hwaccel.currentText()
+        try:
+            ffmpeg_config = {}
+            if hasattr(self, 'ffmpeg_group') and self.ffmpeg_group and self.ffmpeg_group.isChecked():
+                if hasattr(self, 'ffmpeg_hwaccel') and self.ffmpeg_hwaccel:
+                    ffmpeg_config["hwaccel_args"] = self.ffmpeg_hwaccel.currentText()
+        except Exception as e:
+            print(f"Error in FFmpeg config: {e}")
+            ffmpeg_config = {}
 
         # --- Detectors ---
-        detectors_config = {}
-        for i in range(self.memryx_devices.value()):
-            detectors_config[f"memx{i}"] = {
-                "type": "memryx",
-                "device": f"PCIe:{i}"
-            }
+        try:
+            detectors_config = {}
+            if hasattr(self, 'memryx_devices') and self.memryx_devices:
+                for i in range(self.memryx_devices.value()):
+                    detectors_config[f"memx{i}"] = {
+                        "type": "memryx",
+                        "device": f"PCIe:{i}"
+                    }
+        except Exception as e:
+            print(f"Error in Detectors config: {e}")
+            detectors_config = {"memx0": {"type": "memryx", "device": "PCIe:0"}}
 
         # --- Model ---
-        if self.custom_group.isChecked():
-            # Use custom width/height + path
-            w = self.custom_width.value()
-            h = self.custom_height.value()
-            model_path = self.custom_path.text()
-        else:
-            # Use preset resolution selection
-            w, h = self._parse_resolution(self.model_resolution.currentText())
-            model_path = None  # no path unless the custom group is checked
+        try:
+            if hasattr(self, 'custom_group') and self.custom_group and self.custom_group.isChecked():
+                # Use custom width/height + path
+                w = self.custom_width.value() if hasattr(self, 'custom_width') and self.custom_width else 320
+                h = self.custom_height.value() if hasattr(self, 'custom_height') and self.custom_height else 320
+                model_path = self.custom_path.text() if hasattr(self, 'custom_path') and self.custom_path else None
+            else:
+                # Use preset resolution selection
+                if hasattr(self, 'model_resolution') and self.model_resolution:
+                    w, h = self._parse_resolution(self.model_resolution.currentText())
+                else:
+                    w, h = 320, 320
+                model_path = None  # no path unless the custom group is checked
 
-        model_config = {
-            "model_type": self.model_type.currentText(),
-            "width": w,
-            "height": h,
-            "input_tensor": self.input_tensor.currentText(),
-            "input_dtype": self.input_dtype.currentText(),
-            "labelmap_path": self.labelmap_path.text()
-        }
-        if model_path:
-            model_config["path"] = model_path
+            model_config = {
+                "model_type": self.model_type.currentText() if hasattr(self, 'model_type') and self.model_type else "yolo-generic",
+                "width": w,
+                "height": h,
+                "input_tensor": self.input_tensor.currentText() if hasattr(self, 'input_tensor') and self.input_tensor else "nchw",
+                "input_dtype": self.input_dtype.currentText() if hasattr(self, 'input_dtype') and self.input_dtype else "float",
+                "labelmap_path": self.labelmap_path.text() if hasattr(self, 'labelmap_path') and self.labelmap_path else "/labelmap/coco-80.txt"
+            }
+            if model_path:
+                model_config["path"] = model_path
+        except Exception as e:
+            print(f"Error in Model config: {e}")
+            model_config = {
+                "model_type": "yolo-generic",
+                "width": 320,
+                "height": 320,
+                "input_tensor": "nchw",
+                "input_dtype": "float",
+                "labelmap_path": "/labelmap/coco-80.txt"
+            }
 
         # --- Camera ---
-        cameras_config = {}
-        for cam in self.camera_tabs:
-            roles = []
-            if cam["role_detect"].isChecked():
-                roles.append("detect")
-            if cam["role_record"].isChecked():
-                roles.append("record")
+        try:
+            cameras_config = {}
+            if hasattr(self, 'camera_tabs') and self.camera_tabs:
+                for cam in self.camera_tabs:
+                    try:
+                        roles = []
+                        if cam.get("role_detect") and cam["role_detect"].isChecked():
+                            roles.append("detect")
+                        if cam.get("role_record") and cam["role_record"].isChecked():
+                            roles.append("record")
 
-            cameras_config[cam["camera_name"].text()] = {
-                "ffmpeg": {"inputs": [{"path": cam["camera_url"].text(), "roles": roles}]},
-                "detect": {
-                    "width": cam["detect_width"].value(),
-                    "height": cam["detect_height"].value(),
-                    "fps": cam["detect_fps"].value(),
-                    "enabled": cam["detect_enabled"].isChecked(),
-                },
-                "objects": {
-                    "track": [o.strip() for o in cam["objects"].toPlainText().split(",") if o.strip()]
-                },
-                "snapshots": {
-                    "enabled": cam["snapshots_enabled"].isChecked(),
-                    "bounding_box": cam["snapshots_bb"].isChecked(),
-                    "retain": {"default": cam["snapshots_retain"].value()},
-                },
-                "record": {
-                    "enabled": cam["record_enabled"].isChecked(),
-                    "alerts": {"retain": {"days": cam["record_alerts"].value()}},
-                    "detections": {"retain": {"days": cam["record_detections"].value()}},
-                },
-            }
+                        camera_name = cam["camera_name"].text() if cam.get("camera_name") else f"camera_{len(cameras_config)+1}"
+                        camera_url = cam["camera_url"].text() if cam.get("camera_url") else ""
+
+                        cameras_config[camera_name] = {
+                            "ffmpeg": {"inputs": [{"path": camera_url, "roles": roles}]},
+                            "detect": {
+                                "width": cam["detect_width"].value() if cam.get("detect_width") else 1280,
+                                "height": cam["detect_height"].value() if cam.get("detect_height") else 720,
+                                "fps": cam["detect_fps"].value() if cam.get("detect_fps") else 5,
+                                "enabled": cam["detect_enabled"].isChecked() if cam.get("detect_enabled") else True,
+                            },
+                            "objects": {
+                                "track": [o.strip() for o in cam["objects"].toPlainText().split(",") if o.strip()] if cam.get("objects") else ["person", "car"]
+                            },
+                            "snapshots": {
+                                "enabled": cam["snapshots_enabled"].isChecked() if cam.get("snapshots_enabled") else True,
+                                "bounding_box": cam["snapshots_bb"].isChecked() if cam.get("snapshots_bb") else True,
+                                "retain": {"default": cam["snapshots_retain"].value() if cam.get("snapshots_retain") else 14},
+                            },
+                            "record": {
+                                "enabled": cam["record_enabled"].isChecked() if cam.get("record_enabled") else False,
+                                "alerts": {"retain": {"days": cam["record_alerts"].value() if cam.get("record_alerts") else 7}},
+                                "detections": {"retain": {"days": cam["record_detections"].value() if cam.get("record_detections") else 3}},
+                            },
+                        }
+                    except Exception as cam_error:
+                        print(f"Error processing camera {len(cameras_config)+1}: {cam_error}")
+                        continue
+        except Exception as e:
+            print(f"Error in Camera config: {e}")
+            cameras_config = {}
 
         config = {
             "mqtt": mqtt_config,
@@ -1349,22 +2594,44 @@ class ConfigGUI(QWidget):
 
         save_path = os.path.join(config_dir, "config.yaml")
 
-        # Always overwrite the existing config
+        # Always overwrite the existing config with camera spacing
+        yaml_content = yaml.dump(
+            config, 
+            Dumper=MyDumper, 
+            default_flow_style=False, 
+            sort_keys=False
+        )
+        
+        # Add spacing between cameras for better readability
+        yaml_content = MyDumper.add_camera_spacing(yaml_content)
+        
         with open(save_path, "w") as f:
-            yaml.dump(
-                config, 
-                f, 
-                Dumper=MyDumper, 
-                default_flow_style=False, 
-                sort_keys=False
-            )
+            f.write(yaml_content)
 
         print(f"[SUCCESS] Config saved to {save_path}")
 
         self.config_saved = True
+        
+        # Close the GUI after saving
+        # Check if this GUI was launched from frigate_launcher
+        if hasattr(self, 'launcher_parent') and self.launcher_parent is not None:
+            # If launched from launcher, just close this window (not the entire application)
+            self.close()
+        else:
+            # If running standalone, quit the entire application
+            QApplication.instance().quit()
 
-        # Exit with code 0 (normal save)
-        QApplication.instance().exit(0)
+    def smart_close(self, exit_code=0):
+        """Smart close that detects launcher context and closes appropriately"""
+        if hasattr(self, 'launcher_parent') and self.launcher_parent is not None:
+            # If launched from launcher, just close this window
+            self.close()
+        else:
+            # If running standalone, exit the entire application
+            if exit_code == 0:
+                QApplication.instance().quit()
+            else:
+                QApplication.instance().exit(exit_code)
 
     def write_default_config(self):
         """Write a default config.yaml skeleton if user never saved manually"""
@@ -1414,18 +2681,18 @@ class ConfigGUI(QWidget):
         enabled: false
         bounding_box: true
         retain:
-            default: 1   # keep snapshots for 1 day
+            default: 0   # keep snapshots for 'n' day
 
         record:
         enabled: false
         alerts:
             retain:
-            days: 1
+            days: 0
         detections:
             retain:
-            days: 1
+            days: 0
         continuous:
-            days: 1
+            days: 0
         motion:
             days: 0
 
@@ -1472,8 +2739,8 @@ class ConfigGUI(QWidget):
             f"👉 Please edit this file if you wish to make changes."
         )
                 
-        # Exit with code 1 to indicate window was closed without saving
-        QApplication.instance().exit(1)
+        # Smart close with code 1 to indicate window was closed without saving
+        self.smart_close(1)
         event.accept()
 
     def load_existing_config(self):
@@ -1558,70 +2825,8 @@ class ConfigGUI(QWidget):
                 if "labelmap_path" in model:
                     self.labelmap_path.setText(model["labelmap_path"])
 
-            # Load Camera settings
-            if "cameras" in config:
-                cameras = config["cameras"]
-                # Set number of cameras
-                self.cams_count.setValue(len(cameras))
-                
-                # Load each camera's settings
-                for i, (cam_name, cam_config) in enumerate(cameras.items()):
-                    if i >= len(self.camera_tabs):
-                        continue
-
-                    cam_tab = self.camera_tabs[i]
-                    
-                    # Basic settings
-                    cam_tab["camera_name"].setText(cam_name)
-                    
-                    # Get RTSP URL from inputs
-                    if "ffmpeg" in cam_config and "inputs" in cam_config["ffmpeg"]:
-                        inputs = cam_config["ffmpeg"]["inputs"]
-                        if inputs and "path" in inputs[0]:
-                            cam_tab["camera_url"].setText(inputs[0]["path"])
-                        
-                        # Set roles
-                        if inputs and "roles" in inputs[0]:
-                            roles = inputs[0]["roles"]
-                            cam_tab["role_detect"].setChecked("detect" in roles)
-                            cam_tab["role_record"].setChecked("record" in roles)
-
-                    # Detect settings
-                    if "detect" in cam_config:
-                        detect = cam_config["detect"]
-                        if "width" in detect:
-                            cam_tab["detect_width"].setValue(detect["width"])
-                        if "height" in detect:
-                            cam_tab["detect_height"].setValue(detect["height"])
-                        if "fps" in detect:
-                            cam_tab["detect_fps"].setValue(detect["fps"])
-                        if "enabled" in detect:
-                            cam_tab["detect_enabled"].setChecked(detect["enabled"])
-
-                    # Objects to track
-                    if "objects" in cam_config and "track" in cam_config["objects"]:
-                        objects = cam_config["objects"]["track"]
-                        cam_tab["objects"].setPlainText(",".join(objects))
-
-                    # Snapshots settings
-                    if "snapshots" in cam_config:
-                        snapshots = cam_config["snapshots"]
-                        if "enabled" in snapshots:
-                            cam_tab["snapshots_enabled"].setChecked(snapshots["enabled"])
-                        if "bounding_box" in snapshots:
-                            cam_tab["snapshots_bb"].setChecked(snapshots["bounding_box"])
-                        if "retain" in snapshots and "default" in snapshots["retain"]:
-                            cam_tab["snapshots_retain"].setValue(snapshots["retain"]["default"])
-
-                    # Record settings
-                    if "record" in cam_config:
-                        record = cam_config["record"]
-                        if "enabled" in record:
-                            cam_tab["record_enabled"].setChecked(record["enabled"])
-                        if "alerts" in record and "retain" in record["alerts"] and "days" in record["alerts"]["retain"]:
-                            cam_tab["record_alerts"].setValue(record["alerts"]["retain"]["days"])
-                        if "detections" in record and "retain" in record["detections"] and "days" in record["detections"]["retain"]:
-                            cam_tab["record_detections"].setValue(record["detections"]["retain"]["days"])
+            # Note: Camera settings are now loaded separately in load_existing_cameras()
+            # to ensure proper sequencing with tab creation
 
             return True
 
@@ -1643,7 +2848,7 @@ class ConfigGUI(QWidget):
             if not os.path.exists(config_path):
                 self.write_default_config()
             
-            QApplication.instance().exit(2)  # Exit with code 2 for advanced settings
+            self.smart_close(2)  # Smart close with code 2 for advanced settings
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)

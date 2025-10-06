@@ -48,6 +48,13 @@ except ImportError as e:
     print(f"Warning: Could not import SimpleCameraGUI: {e}")
     SimpleCameraGUI = None
 
+# Import Advanced Config GUI
+try:
+    from advanced_config_gui import ConfigGUI
+except ImportError as e:
+    print(f"Warning: Could not import ConfigGUI: {e}")
+    ConfigGUI = None
+
 class PasswordDialog(QDialog):
     """Secure password input dialog for sudo operations"""
     
@@ -561,9 +568,9 @@ mqtt:
 enabled: False
 
 detectors:
-memryx:
+  memx0:
     type: memryx
-    device: /dev/memx0
+    device: PCIe:0
 
 model:
 model_type: yolo-generic
@@ -610,15 +617,15 @@ cam1:
     enabled: false
     bounding_box: true
     retain:
-        default: 1  # Keep snapshots for 2 days
+        default: 0  # Keep snapshots for 'n' days
     record:
     enabled: false
     alerts:
         retain:
-        days: 1
+        days: 0
     detections:
         retain:
-        days: 1
+        days: 0
 
 version: 0.17-0
 
@@ -1817,6 +1824,13 @@ class FrigateLauncher(QMainWindow):
         # Initialize loading state
         self.is_initializing = True
         
+        # Button state enhancement variables
+        self.button_animation_timer = QTimer()
+        self.button_animation_timer.timeout.connect(self.update_button_animation)
+        self.button_animation_dots = 0
+        self.button_base_text = ""
+        self.button_operation_state = "idle"  # idle, building, starting, running, stopping
+        
         # Store references to container layouts for responsive resizing
         self.responsive_containers = []
         
@@ -2383,6 +2397,8 @@ class FrigateLauncher(QMainWindow):
             self.preconfigured_open_ui_btn.setEnabled(True)
         if hasattr(self, 'setup_cameras_btn'):
             self.setup_cameras_btn.setEnabled(True)
+        if hasattr(self, 'camera_guide_btn'):
+            self.camera_guide_btn.setEnabled(True)
         
         # Update status bar to ready state
         if hasattr(self, 'status_label'):
@@ -2637,6 +2653,35 @@ class FrigateLauncher(QMainWindow):
         self.main_tab_widget.setCurrentIndex(2)  # Advanced Settings tab
         if hasattr(self, 'advanced_tab_widget'):
             self.advanced_tab_widget.setCurrentIndex(2)  # Docker Logs sub-tab
+    
+    def go_to_docker_logs(self):
+        """Navigate directly to Advanced Settings → Docker Logs tab"""
+        try:
+            # Switch to Advanced Settings tab (index 2)
+            self.main_tab_widget.setCurrentIndex(2)
+            
+            # Add a small delay to ensure the advanced tab is fully loaded
+            def navigate_to_docker_logs():
+                if hasattr(self, 'advanced_tab_widget'):
+                    # Switch to Docker Logs sub-tab (index 2: Configuration, Docker Manager, Docker Logs)
+                    self.advanced_tab_widget.setCurrentIndex(2)  # Docker Logs is the 3rd tab (index 2)
+                    print("DEBUG: Navigated to Docker Logs tab (index 2)")
+                else:
+                    print("DEBUG: advanced_tab_widget not found, retrying...")
+                    # If advanced tab isn't loaded yet, wait and try again
+                    QTimer.singleShot(500, navigate_to_docker_logs)
+            
+            # Use a timer to ensure the tab switch happens after the main tab is loaded
+            QTimer.singleShot(100, navigate_to_docker_logs)
+            
+            # Show status message
+            self.statusBar().showMessage('Navigated to Docker Logs - Check here for Frigate troubleshooting information')
+            
+        except Exception as e:
+            QMessageBox.warning(
+                self, 'Navigation Error',
+                f'Could not navigate to Docker Logs:\n{str(e)}'
+            )
 
     # === New Menu Functions ===
     
@@ -3036,26 +3081,27 @@ class FrigateLauncher(QMainWindow):
                 except:
                     container_running = False
             
-            # Update button states
+            # Update button states using enhanced state management
             if hasattr(self, 'preconfigured_start_btn') and hasattr(self, 'preconfigured_stop_btn'):
+                # Skip if currently in an operation state (building, starting, stopping)
+                if hasattr(self, 'button_operation_state') and self.button_operation_state in ["building", "starting", "stopping"]:
+                    return
+                    
                 if container_running:
-                    # Container is running - disable start, enable stop
-                    self.preconfigured_start_btn.setEnabled(False)
+                    # Container is running - show running state
+                    self.update_preconfigured_button_state("running")
                     self.preconfigured_start_btn.setToolTip("Frigate container is already running")
-                    self.preconfigured_stop_btn.setEnabled(True)
-                    self.preconfigured_stop_btn.setToolTip("Stop Frigate container")
+                    self.preconfigured_stop_btn.setToolTip("Stop and remove Frigate container completely")
                 elif container_exists:
-                    # Container exists but not running - enable start, disable stop
-                    self.preconfigured_start_btn.setEnabled(True)
-                    self.preconfigured_start_btn.setToolTip("Start Frigate container")
-                    self.preconfigured_stop_btn.setEnabled(False)
-                    self.preconfigured_stop_btn.setToolTip("Frigate container is not running")
+                    # Container exists but not running - show idle state
+                    self.update_preconfigured_button_state("idle")
+                    self.preconfigured_start_btn.setToolTip("Start existing Frigate container")
+                    self.preconfigured_stop_btn.setToolTip("Container is stopped - click Start to run")
                 else:
-                    # No container - enable start, disable stop
-                    self.preconfigured_start_btn.setEnabled(True)
-                    self.preconfigured_start_btn.setToolTip("Start Frigate container")
-                    self.preconfigured_stop_btn.setEnabled(False)
-                    self.preconfigured_stop_btn.setToolTip("No Frigate container found")
+                    # No container - show idle state (will be built on start)
+                    self.update_preconfigured_button_state("idle")
+                    self.preconfigured_start_btn.setToolTip("Build and start new Frigate container")
+                    self.preconfigured_stop_btn.setToolTip("No container to stop")
             
             # Update Web UI button state - only enabled when container is running
             if hasattr(self, 'preconfigured_open_ui_btn'):
@@ -3065,22 +3111,50 @@ class FrigateLauncher(QMainWindow):
                 else:
                     self.preconfigured_open_ui_btn.setEnabled(False)
                     self.preconfigured_open_ui_btn.setToolTip("Start Frigate first to access Web UI")
+            
+            # Show/hide troubleshooting section based on container status
+            if hasattr(self, 'troubleshooting_group'):
+                # Show troubleshooting ONLY when Frigate container is running
+                # (same condition as when Web UI button is enabled)
+                self.troubleshooting_group.setVisible(container_running)
                     
         except Exception as e:
-            # On error, enable start/stop buttons, disable Web UI button
+            # On error, show idle state and enable start button
             if hasattr(self, 'preconfigured_start_btn') and hasattr(self, 'preconfigured_stop_btn'):
-                self.preconfigured_start_btn.setEnabled(True)
-                self.preconfigured_stop_btn.setEnabled(True)
+                self.update_preconfigured_button_state("idle")
             if hasattr(self, 'preconfigured_open_ui_btn'):
                 self.preconfigured_open_ui_btn.setEnabled(False)
                 self.preconfigured_open_ui_btn.setToolTip("Unable to check Frigate status")
+            # Hide troubleshooting section on error
+            if hasattr(self, 'troubleshooting_group'):
+                self.troubleshooting_group.setVisible(False)
             print(f"Error updating button states: {e}")
     
     def update_preconfigured_warnings(self):
         """Show/hide warning messages based on system status"""
         try:
+            docker_issue = False
             memryx_issue = False
             frigate_issue = False
+            
+            # Check Docker status - only flag true installation issues
+            try:
+                docker_status = self._check_docker_status()
+                # Only show warning for actual installation issues, not temporary problems
+                if "Not Installed" in docker_status['text']:
+                    docker_issue = True
+                # Don't flag "Not Available" or "Timeout" as installation issues - could be temporary
+            except Exception:
+                # Exception during check could mean Docker is not installed
+                try:
+                    # Double-check with simpler command
+                    import subprocess
+                    subprocess.run(['docker', '--version'], capture_output=True, text=True, timeout=5, check=True)
+                    # If docker --version works, it's installed but maybe service issue
+                    docker_issue = False
+                except (subprocess.CalledProcessError, FileNotFoundError, subprocess.TimeoutExpired):
+                    # Docker command not found - truly not installed
+                    docker_issue = True
             
             # Check MemryX status
             try:
@@ -3103,14 +3177,27 @@ class FrigateLauncher(QMainWindow):
                 frigate_issue = True
             
             # Show/hide warning messages
+            if hasattr(self, 'docker_warning'):
+                self.docker_warning.setVisible(docker_issue)
             if hasattr(self, 'memryx_warning'):
                 self.memryx_warning.setVisible(memryx_issue)
             if hasattr(self, 'frigate_warning'):
                 self.frigate_warning.setVisible(frigate_issue)
             if hasattr(self, 'manual_setup_btn'):
-                self.manual_setup_btn.setVisible(memryx_issue or frigate_issue)
+                self.manual_setup_btn.setVisible(docker_issue or memryx_issue or frigate_issue)
             if hasattr(self, 'warning_group'):
-                self.warning_group.setVisible(memryx_issue or frigate_issue)
+                self.warning_group.setVisible(docker_issue or memryx_issue or frigate_issue)
+                
+                # Disable start button if system setup is required
+                if hasattr(self, 'preconfigured_start_btn'):
+                    if docker_issue or memryx_issue or frigate_issue:
+                        self.preconfigured_start_btn.setEnabled(False)
+                        self.preconfigured_start_btn.setToolTip("System setup required before starting Frigate")
+                    else:
+                        # Only enable if no warnings and not in a disabled state
+                        if hasattr(self, 'button_operation_state') and self.button_operation_state not in ['building', 'starting', 'stopping']:
+                            self.preconfigured_start_btn.setEnabled(True)
+                            self.preconfigured_start_btn.setToolTip("Start Frigate container")
                 
         except Exception as e:
             print(f"Error updating warnings: {e}")
@@ -3162,7 +3249,603 @@ class FrigateLauncher(QMainWindow):
                 self, 'Error Opening Camera GUI',
                 f'Could not open the Simple Camera GUI:\n{str(e)}'
             )
-    
+
+    def show_camera_setup_guide(self):
+        """Display the camera setup guide in a professional dialog with modern styling"""
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Camera Setup Guide")
+        dialog.resize(1300, 900)
+        dialog.setStyleSheet("""
+            QDialog {
+                background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
+                    stop: 0 #f8fafc, stop: 1 #e2e8f0);
+            }
+        """)
+        
+        # Create main layout
+        main_layout = QVBoxLayout(dialog)
+        main_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.setSpacing(0)
+        
+        # Modern header with gradient and shadow
+        header_frame = QFrame()
+        header_frame.setFixedHeight(100)
+        header_frame.setStyleSheet("""
+            QFrame {
+                background: qlineargradient(x1: 0, y1: 0, x2: 1, y2: 1,
+                    stop: 0 #0694a2, stop: 1 #0f766e);
+                border: none;
+                border-bottom: 3px solid rgba(0,0,0,0.1);
+            }
+        """)
+        
+        header_layout = QHBoxLayout(header_frame)
+        header_layout.setContentsMargins(30, 20, 30, 20)
+        
+        # Header icon and title
+        icon_label = QLabel("📹")
+        icon_label.setStyleSheet("""
+            font-size: 32px;
+            color: white;
+            background: rgba(255,255,255,0.1);
+            border-radius: 25px;
+            padding: 8px;
+            margin-right: 15px;
+        """)
+        icon_label.setFixedSize(50, 50)
+        icon_label.setAlignment(Qt.AlignCenter)
+        
+        title_label = QLabel("Camera Setup Guide")
+        title_label.setStyleSheet("""
+            font-family: 'Segoe UI', 'SF Pro Display', Arial, sans-serif;
+            font-size: 28px;
+            font-weight: 700;
+            color: white;
+            background: none;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
+        """)
+        
+        subtitle_label = QLabel("Complete step-by-step setup instructions")
+        subtitle_label.setStyleSheet("""
+            font-family: 'Segoe UI', Arial, sans-serif;
+            font-size: 16px;
+            color: rgba(255,255,255,0.9);
+            background: none;
+            margin-top: 5px;
+        """)
+        
+        title_container = QVBoxLayout()
+        title_container.addWidget(title_label)
+        title_container.addWidget(subtitle_label)
+        title_container.setSpacing(5)
+        title_container.setContentsMargins(0, 0, 0, 0)
+        
+        header_layout.addWidget(icon_label)
+        header_layout.addLayout(title_container)
+        header_layout.addStretch()
+        
+        main_layout.addWidget(header_frame)
+        
+        # Content area with modern card-style design
+        content_scroll = QScrollArea()
+        content_scroll.setWidgetResizable(True)
+        content_scroll.setStyleSheet("""
+            QScrollArea {
+                border: none;
+                background: transparent;
+            }
+            QScrollBar:vertical {
+                background: #e2e8f0;
+                width: 12px;
+                border-radius: 6px;
+                margin: 2px;
+            }
+            QScrollBar::handle:vertical {
+                background: #cbd5e0;
+                border-radius: 6px;
+                min-height: 20px;
+            }
+            QScrollBar::handle:vertical:hover {
+                background: #a0aec0;
+            }
+        """)
+        
+        content_widget = QWidget()
+        content_layout = QVBoxLayout(content_widget)
+        content_layout.setContentsMargins(40, 30, 40, 30)
+        content_layout.setSpacing(25)
+        
+        # Get cam_assets directory
+        cam_assets_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cam_assets")
+        
+        # Step data with modern styling
+        steps = [
+            {
+                "title": "STEP 1: Power On Camera",
+                "description": "Connect the power adapter to your camera's power port and wait 30 seconds for initialization.",
+                "points": [
+                    "Look for the green LED light on the camera's back",
+                    "Camera may rotate during startup (normal behavior)",
+                    "Green LED solid = ready for setup"
+                ],
+                "image": None
+            },
+            {
+                "title": "STEP 2: Install Mobile App",
+                "description": "Download 'Amcrest View Pro' from your device's app store.",
+                "points": [
+                    "iOS: App Store | Android: Google Play Store",
+                    "Search for 'Amcrest View Pro'",
+                    "Install and open the app"
+                ],
+                "image": "setup_1.png"
+            },
+            {
+                "title": "STEP 3: App Initial Setup",
+                "description": "Launch the app and follow the welcome screens.",
+                "points": [
+                    "Allow required permissions (camera, location)",
+                    "Tap 'Start' to begin setup"
+                ],
+                "image": "setup_2.jpg"
+            },
+            {
+                "title": "STEP 4: Select WiFi Camera",
+                "description": "Choose WiFi Camera setup option.",
+                "points": [
+                    "Select 'WiFi Camera' from menu"
+                ],
+                "image": "setup_3.jpg"
+            },
+            {
+                "title": "STEP 4.1: WiFi Configuration Setup",
+                "description": "Select WiFi configuration setup option.",
+                "points": [
+                    "Choose WiFi configuration setup",
+                    "Important: Your phone must be connected to the WiFi network you want the camera to use"
+                ],
+                "image": "setup_4.jpg"
+            },
+            {
+                "title": "STEP 5: Scan Camera QR Code",
+                "description": "Find and scan the QR code on your camera's back.",
+                "points": [
+                    "Allow camera access for QR scanning",
+                    "Locate QR code on camera's back and scan it"
+                ],
+                "image": "setup_5.jpg"
+            },
+            {
+                "title": "STEP 6: Configure Camera Settings",
+                "description": "Set up camera name and credentials.",
+                "points": [
+                    "Enter a descriptive camera name (e.g., 'Front Door', 'Garage')",
+                    "Default username/password: admin/admin"
+                ],
+                "image": "setup_7.jpg"
+            },
+            {
+                "title": "STEP 6.1: Enter WiFi Password",
+                "description": "Enter your WiFi network password.",
+                "points": [
+                    "Enter your WiFi network password carefully",
+                    "Ensure password is correct",
+                    "Double-check for typos"
+                ],
+                "image": "setup_8.jpg"
+            },
+            {
+                "title": "STEP 7: Network Connection",
+                "description": "Connect camera to your network.",
+                "points": [
+                    "Allow app to find local network devices",
+                    "Wait for WiFi connection process (30-60 seconds)"
+                ],
+                "image": "setup_9.jpg"
+            },
+            {
+                "title": "STEP 7.1: Connection Success",
+                "description": "Camera setup completed successfully.",
+                "points": [
+                    "Connection successful! Camera is now online",
+                    "Click on 'Start Live View' to proceed",
+                    "Camera is ready for use"
+                ],
+                "image": "setup_11.jpg"
+            },
+            {
+                "title": "STEP 8: Set Security Password",
+                "description": "Create a secure password for camera access.",
+                "points": [
+                    "Tap 'Start Live View'",
+                    "Create strong password (8-32 characters)",
+                    "Use mix of letters and numbers"
+                ],
+                "image": "setup_12.jpg"
+            }
+        ]
+        
+        # Create step cards
+        for i, step in enumerate(steps):
+            step_frame = QFrame()
+            step_frame.setStyleSheet("""
+                QFrame {
+                    background: white;
+                    border: 1px solid #e2e8f0;
+                    border-radius: 12px;
+                    padding: 0;
+                    margin: 5px 0;
+                }
+                QFrame:hover {
+                    border: 1px solid #cbd5e0;
+                    box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+                }
+            """)
+            
+            step_layout = QHBoxLayout(step_frame)
+            step_layout.setContentsMargins(20, 15, 20, 15)
+            step_layout.setSpacing(20)
+            
+            # Left content area
+            left_content = QVBoxLayout()
+            left_content.setSpacing(8)
+            
+            # Step header
+            step_header = QLabel(step["title"])
+            step_header.setStyleSheet("""
+                font-family: 'Segoe UI', Arial, sans-serif;
+                font-size: 18px;
+                font-weight: 700;
+                color: #1a365d;
+                background: qlineargradient(x1: 0, y1: 0, x2: 1, y2: 0,
+                    stop: 0 #0694a2, stop: 1 #0f766e);
+                color: white;
+                padding: 10px 18px;
+                border-radius: 6px;
+                margin-bottom: 5px;
+            """)
+            
+            # Description
+            desc_label = QLabel(step["description"])
+            desc_label.setStyleSheet("""
+                font-family: 'Segoe UI', Arial, sans-serif;
+                font-size: 16px;
+                font-weight: 600;
+                color: #2d3748;
+                margin-bottom: 8px;
+            """)
+            desc_label.setWordWrap(True)
+            
+            # Points list
+            points_widget = QWidget()
+            points_layout = QVBoxLayout(points_widget)
+            points_layout.setContentsMargins(0, 0, 0, 0)
+            points_layout.setSpacing(3)
+            
+            for point in step["points"]:
+                point_label = QLabel(f"<span style='color: #0694a2; font-weight: bold;'>▸</span> {point}")
+                point_label.setStyleSheet("""
+                    font-family: 'Segoe UI', Arial, sans-serif;
+                    font-size: 15px;
+                    color: #4a5568;
+                    padding: 3px 0;
+                """)
+                point_label.setWordWrap(True)
+                points_layout.addWidget(point_label)
+            
+            left_content.addWidget(step_header)
+            left_content.addWidget(desc_label)
+            left_content.addWidget(points_widget)
+            left_content.addStretch()
+            
+            step_layout.addLayout(left_content, 2)
+            
+            # Right image area
+            if step["image"]:
+                image_label = QLabel()
+                image_path = os.path.join(cam_assets_dir, step["image"])
+                
+                if os.path.exists(image_path):
+                    pixmap = QPixmap(image_path)
+                    if not pixmap.isNull():
+                        # Scale image to fit nicely
+                        scaled_pixmap = pixmap.scaled(250, 400, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                        image_label.setPixmap(scaled_pixmap)
+                        image_label.setStyleSheet("""
+                            border: 2px solid #e2e8f0;
+                            border-radius: 8px;
+                            padding: 5px;
+                            background: #f7fafc;
+                        """)
+                        image_label.setAlignment(Qt.AlignCenter)
+                        step_layout.addWidget(image_label, 1)
+                
+            content_layout.addWidget(step_frame)
+        
+        # Completion section
+        completion_frame = QFrame()
+        completion_frame.setStyleSheet("""
+            QFrame {
+                background: qlineargradient(x1: 0, y1: 0, x2: 1, y2: 0,
+                    stop: 0 #0694a2, stop: 1 #0f766e);
+                border: none;
+                border-radius: 12px;
+                padding: 20px;
+                margin: 10px 0;
+            }
+        """)
+        
+        completion_layout = QVBoxLayout(completion_frame)
+        completion_layout.setSpacing(10)
+        
+        completion_title = QLabel("🎉 SETUP COMPLETE!")
+        completion_title.setStyleSheet("""
+            font-family: 'Segoe UI', Arial, sans-serif;
+            font-size: 24px;
+            font-weight: 700;
+            color: white;
+            text-shadow: 1px 1px 2px rgba(0,0,0,0.3);
+        """)
+        
+        credentials_text = QLabel("Your camera credentials: Username: admin | Password: [your secure password]")
+        credentials_text.setStyleSheet("""
+            font-family: 'Segoe UI', Arial, sans-serif;
+            font-size: 16px;
+            color: white;
+            background: rgba(255,255,255,0.1);
+            padding: 10px;
+            border-radius: 6px;
+        """)
+        
+        completion_layout.addWidget(completion_title)
+        completion_layout.addWidget(credentials_text)
+        
+        content_layout.addWidget(completion_frame)
+        
+        # Frigate Integration Steps (after hardware setup completion)
+        frigate_steps = [
+            {
+                "title": "NEXT STEPS: Configure Camera in Frigate",
+                "description": "Now that your camera is set up, add it to Frigate for AI detection.",
+                "points": [
+                    "Camera hardware setup is complete",
+                    "Next: Add camera to Frigate application",
+                    "Use the 'Set Up Your Cameras' button below"
+                ],
+                "image": "gui_1.png"
+            },
+            {
+                "title": "STEP 9: Open Camera Setup Tool", 
+                "description": "Go to setup your camera button to add cameras to Frigate.",
+                "points": [
+                    "Click on 'Set Up Your Cameras' button",
+                    "This opens the camera configuration interface",
+                    "You'll configure detection and recording settings"
+                ],
+                "image": "gui_2.png"
+            },
+            {
+                "title": "STEP 10: Discover Camera IP Address",
+                "description": "Inside the setup tool, click on discover camera button to identify IP addresses.",
+                "points": [
+                    "Click on 'Discover Camera' button",
+                    "This will scan your network for IP cameras",
+                    "Automatically finds camera IP addresses"
+                ],
+                "image": "gui_3.png"
+            },
+            {
+                "title": "STEP 11: Start Network Scan",
+                "description": "Start scan to identify the IP addresses of cameras connected in your house.",
+                "points": [
+                    "Click 'Start Scan' to begin network discovery",
+                    "Wait for scan to complete (may take 30-60 seconds)",
+                    "All connected IP cameras will be detected"
+                ],
+                "image": "gui_4.png"
+            },
+            {
+                "title": "STEP 12: Select Camera and Configure",
+                "description": "Select your IP camera and enter username/password to complete setup.",
+                "points": [
+                    "You will see detected IP cameras in the list",
+                    "Select your camera from the discovered devices",
+                    "Enter the username and password you created earlier",
+                    "Click to proceed and complete camera integration"
+                ],
+                "image": "gui_5.png"
+            }
+        ]
+        
+        # Create Frigate integration step cards
+        for i, step in enumerate(frigate_steps):
+            step_frame = QFrame()
+            step_frame.setStyleSheet("""
+                QFrame {
+                    background: white;
+                    border: 1px solid #e2e8f0;
+                    border-radius: 12px;
+                    padding: 0;
+                    margin: 5px 0;
+                }
+                QFrame:hover {
+                    border: 1px solid #cbd5e0;
+                    box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+                }
+            """)
+            
+            step_layout = QHBoxLayout(step_frame)
+            step_layout.setContentsMargins(20, 15, 20, 15)
+            step_layout.setSpacing(20)
+            
+            # Left content area
+            left_content = QVBoxLayout()
+            left_content.setSpacing(8)
+            
+            # Step header
+            step_header = QLabel(step["title"])
+            step_header.setStyleSheet("""
+                font-family: 'Segoe UI', Arial, sans-serif;
+                font-size: 18px;
+                font-weight: 700;
+                color: #1a365d;
+                background: qlineargradient(x1: 0, y1: 0, x2: 1, y2: 0,
+                    stop: 0 #0694a2, stop: 1 #0f766e);
+                color: white;
+                padding: 10px 18px;
+                border-radius: 6px;
+                margin-bottom: 5px;
+            """)
+            
+            # Description
+            desc_label = QLabel(step["description"])
+            desc_label.setStyleSheet("""
+                font-family: 'Segoe UI', Arial, sans-serif;
+                font-size: 16px;
+                font-weight: 600;
+                color: #2d3748;
+                margin-bottom: 8px;
+            """)
+            desc_label.setWordWrap(True)
+            
+            # Points list
+            points_widget = QWidget()
+            points_layout = QVBoxLayout(points_widget)
+            points_layout.setContentsMargins(0, 0, 0, 0)
+            points_layout.setSpacing(3)
+            
+            for point in step["points"]:
+                point_label = QLabel(f"<span style='color: #0694a2; font-weight: bold;'>▸</span> {point}")
+                point_label.setStyleSheet("""
+                    font-family: 'Segoe UI', Arial, sans-serif;
+                    font-size: 15px;
+                    color: #4a5568;
+                    padding: 3px 0;
+                """)
+                point_label.setWordWrap(True)
+                points_layout.addWidget(point_label)
+            
+            left_content.addWidget(step_header)
+            left_content.addWidget(desc_label)
+            left_content.addWidget(points_widget)
+            left_content.addStretch()
+            
+            step_layout.addLayout(left_content, 2)
+            
+            # Right image area
+            if step["image"]:
+                image_label = QLabel()
+                image_path = os.path.join(cam_assets_dir, step["image"])
+                
+                if os.path.exists(image_path):
+                    pixmap = QPixmap(image_path)
+                    if not pixmap.isNull():
+                        # Scale image to fit nicely
+                        scaled_pixmap = pixmap.scaled(250, 400, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                        image_label.setPixmap(scaled_pixmap)
+                        image_label.setStyleSheet("""
+                            border: 2px solid #e2e8f0;
+                            border-radius: 8px;
+                            padding: 5px;
+                            background: #f7fafc;
+                        """)
+                        image_label.setAlignment(Qt.AlignCenter)
+                        step_layout.addWidget(image_label, 1)
+                
+            content_layout.addWidget(step_frame)
+        
+        # Troubleshooting section
+        trouble_frame = QFrame()
+        trouble_frame.setStyleSheet("""
+            QFrame {
+                background: #fed7d7;
+                border: 1px solid #fc8181;
+                border-radius: 12px;
+                padding: 15px;
+                margin: 10px 0;
+            }
+        """)
+        
+        trouble_layout = QVBoxLayout(trouble_frame)
+        trouble_title = QLabel("🛠️ Quick Troubleshooting")
+        trouble_title.setStyleSheet("""
+            font-family: 'Segoe UI', Arial, sans-serif;
+            font-size: 18px;
+            font-weight: 700;
+            color: #9b2c2c;
+            margin-bottom: 8px;
+        """)
+        
+        trouble_points = [
+            "Camera won't power on: Check power connection, try different outlet",
+            "Can't find camera: Restart camera (unplug 10 seconds), ensure same WiFi network",
+            "WiFi won't connect: Verify password, use 2.4GHz network, move closer to router",
+            "App issues: Restart app, check internet, update to latest version"
+        ]
+        
+        trouble_layout.addWidget(trouble_title)
+        for point in trouble_points:
+            point_label = QLabel(f"▸ {point}")
+            point_label.setStyleSheet("""
+                font-family: 'Segoe UI', Arial, sans-serif;
+                font-size: 14px;
+                color: #9b2c2c;
+                padding: 3px 0;
+            """)
+            point_label.setWordWrap(True)
+            trouble_layout.addWidget(point_label)
+        
+        content_layout.addWidget(trouble_frame)
+        
+        content_scroll.setWidget(content_widget)
+        main_layout.addWidget(content_scroll)
+        
+        # Modern footer with close button
+        footer_frame = QFrame()
+        footer_frame.setFixedHeight(80)
+        footer_frame.setStyleSheet("""
+            QFrame {
+                background: white;
+                border-top: 1px solid #e2e8f0;
+            }
+        """)
+        
+        footer_layout = QHBoxLayout(footer_frame)
+        footer_layout.setContentsMargins(25, 18, 25, 18)
+        footer_layout.addStretch()
+        
+        close_btn = QPushButton("✕ Close Guide")
+        close_btn.setFixedSize(160, 45)
+        close_btn.setStyleSheet("""
+            QPushButton {
+                background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
+                    stop: 0 #0694a2, stop: 1 #0f766e);
+                color: white;
+                border: none;
+                border-radius: 8px;
+                font-family: 'Segoe UI', Arial, sans-serif;
+                font-size: 16px;
+                font-weight: 600;
+                text-shadow: 1px 1px 2px rgba(0,0,0,0.3);
+            }
+            QPushButton:hover {
+                background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
+                    stop: 0 #0891b2, stop: 1 #134e4a);
+                transform: translateY(-1px);
+            }
+            QPushButton:pressed {
+                background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
+                    stop: 0 #0e7490, stop: 1 #042f2e);
+            }
+        """)
+        close_btn.clicked.connect(dialog.accept)
+        
+        footer_layout.addWidget(close_btn)
+        main_layout.addWidget(footer_frame)
+        
+        # Show dialog
+        dialog.exec()
+
     def launch_simple_gui(self):
         """Launch the monitoring GUI - this could open Frigate web UI or monitoring interface"""
         try:
@@ -3288,8 +3971,9 @@ class FrigateLauncher(QMainWindow):
 
 # MemryX detector configuration
 detectors:
-  memryx:
+  memx0:
     type: memryx
+    device: PCIe:0
     
 # Object tracking configuration
 objects:
@@ -4822,6 +5506,21 @@ cameras:
         warning_layout.setSpacing(10)
         
         # Warning message labels with light red styling
+        self.docker_warning = QLabel("🐳 Docker not installed or not running. Docker setup required.")
+        self.docker_warning.setVisible(False)
+        self.docker_warning.setWordWrap(True)
+        self.docker_warning.setStyleSheet("""
+            QLabel {
+                background: #fef2f2;
+                color: #dc2626;
+                padding: 12px;
+                border-radius: 6px;
+                font-size: 13px;
+                border-left: 4px solid #fca5a5;
+                margin: 4px 0px;
+            }
+        """)
+        
         self.memryx_warning = QLabel("🔧 MemryX device not detected. Manual setup required.")
         self.memryx_warning.setVisible(False)
         self.memryx_warning.setWordWrap(True)
@@ -4878,11 +5577,53 @@ cameras:
             }
         """)
         
+        warning_layout.addWidget(self.docker_warning)
         warning_layout.addWidget(self.memryx_warning)
         warning_layout.addWidget(self.frigate_warning)
         warning_layout.addWidget(self.manual_setup_btn)
         
-        # Main Camera Setup section - more prominent styling with enhanced header and better spacing
+        # Main Camera Setup section - wrapped in scroll area for responsive resizing
+        camera_setup_scroll = QScrollArea()
+        camera_setup_scroll.setWidgetResizable(True)
+        camera_setup_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        camera_setup_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        camera_setup_scroll.setFrameShape(QFrame.NoFrame)  # Remove frame for cleaner look
+        camera_setup_scroll.setStyleSheet("""
+            QScrollArea {
+                background: transparent;
+                border: none;
+            }
+            QScrollArea > QWidget > QWidget {
+                background: transparent;
+            }
+            QScrollBar:vertical {
+                background: #f0f0f0;
+                width: 12px;
+                border-radius: 6px;
+            }
+            QScrollBar::handle:vertical {
+                background: #4a90a4;
+                border-radius: 6px;
+                min-height: 20px;
+            }
+            QScrollBar::handle:vertical:hover {
+                background: #38758a;
+            }
+            QScrollBar:horizontal {
+                background: #f0f0f0;
+                height: 12px;
+                border-radius: 6px;
+            }
+            QScrollBar::handle:horizontal {
+                background: #4a90a4;
+                border-radius: 6px;
+                min-width: 20px;
+            }
+            QScrollBar::handle:horizontal:hover {
+                background: #38758a;
+            }
+        """)
+        
         setup_group = QGroupBox("🎥 Camera Setup")
         setup_group.setMinimumHeight(220)  # Ensure adequate height to prevent squeezing
         setup_group.setStyleSheet("""
@@ -4933,14 +5674,89 @@ cameras:
         """)
         setup_layout.addWidget(info_label)
         
-        # Main setup button (prominent and centered) - improved spacing
-        button_layout = QHBoxLayout()
-        button_layout.setContentsMargins(0, 10, 0, 5)  # Add some top margin, reduce bottom
-        button_layout.addStretch(1)  # Add stretch before button
+        # Camera Setup Guide section (FIRST - for learning how to setup cameras)
+        guide_container = QWidget()
+        guide_layout = QVBoxLayout(guide_container)  # Changed to VBoxLayout for better responsive behavior
+        guide_layout.setContentsMargins(0, 10, 0, 0)
+        guide_layout.setSpacing(10)
         
+        # Create a horizontal container for larger screens, but allow vertical stacking on small screens
+        guide_row_container = QWidget()
+        guide_row_layout = QHBoxLayout(guide_row_container)
+        guide_row_layout.setContentsMargins(0, 0, 0, 0)
+        
+        # Guide button (primary step) - with responsive sizing
+        self.camera_guide_btn = QPushButton("📖 Camera Setup Guide")
+        self.camera_guide_btn.setMinimumHeight(45)
+        self.camera_guide_btn.setMinimumWidth(200)
+        self.camera_guide_btn.setMaximumWidth(250)  # Prevent excessive stretching
+        self.camera_guide_btn.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+        self.camera_guide_btn.clicked.connect(self.show_camera_setup_guide)
+        self.camera_guide_btn.setStyleSheet("""
+            QPushButton {
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1, 
+                    stop:0 #007bff, stop:1 #0056b3);
+                color: white;
+                border: none;
+                border-radius: 10px;
+                padding: 14px 20px;
+                font-size: 14px;
+                font-weight: 600;
+                margin: 4px 0px;
+            }
+            QPushButton:hover {
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1, 
+                    stop:0 #0084ff, stop:1 #0062cc);
+            }
+            QPushButton:pressed {
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1, 
+                    stop:0 #0062cc, stop:1 #004a9f);
+            }
+        """)
+        
+        # Guide description - with responsive text wrapping
+        guide_description = QLabel(
+            "<b>Step 1:</b> Learn how to setup your Amcrest camera (with WiFi, username/password)"
+        )
+        guide_description.setWordWrap(True)
+        guide_description.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        guide_description.setStyleSheet("""
+            QLabel {
+                background: #e8f4fd;
+                color: #1e40af;
+                padding: 12px 15px;
+                border-radius: 8px;
+                font-size: 13px;
+                border: 1px solid #bfdbfe;
+                margin-left: 10px;
+            }
+        """)
+        
+        guide_row_layout.addWidget(self.camera_guide_btn)
+        guide_row_layout.addWidget(guide_description, 1)  # Stretch factor 1
+        guide_layout.addWidget(guide_row_container)
+        setup_layout.addWidget(guide_container)
+        
+        # Setup Cameras section (SECOND - after learning from guide)
+        setup_container = QWidget()
+        setup_container_layout = QVBoxLayout(setup_container)  # Changed to VBoxLayout for better responsive behavior
+        setup_container_layout.setContentsMargins(0, 15, 0, 5)
+        setup_container_layout.setSpacing(10)
+        
+        # Create button container with centering
+        setup_button_container = QWidget()
+        setup_button_layout = QHBoxLayout(setup_button_container)
+        setup_button_layout.setContentsMargins(0, 0, 0, 0)
+        
+        # Add stretch before button for centering
+        setup_button_layout.addStretch(1)
+        
+        # Setup button (secondary step) - responsive sizing
         self.setup_cameras_btn = QPushButton("🎥 Set Up Your Cameras")
-        self.setup_cameras_btn.setMinimumHeight(45)  # Slightly smaller but still prominent
-        self.setup_cameras_btn.setMinimumWidth(240)  # Adequate width
+        self.setup_cameras_btn.setMinimumHeight(55)
+        self.setup_cameras_btn.setMinimumWidth(300)
+        self.setup_cameras_btn.setMaximumWidth(400)  # Prevent excessive stretching
+        self.setup_cameras_btn.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
         self.setup_cameras_btn.clicked.connect(self.open_simple_camera_gui)
         self.setup_cameras_btn.setEnabled(False)  # Disabled during initialization
         self.setup_cameras_btn.setStyleSheet("""
@@ -4949,9 +5765,9 @@ cameras:
                     stop:0 #48bb78, stop:1 #38a169);
                 color: white;
                 border: none;
-                border-radius: 10px;
-                padding: 14px 20px;
-                font-size: 15px;
+                border-radius: 12px;
+                padding: 16px 24px;
+                font-size: 16px;
                 font-weight: 600;
                 margin: 4px 0px;
             }
@@ -4969,13 +5785,41 @@ cameras:
                 border: 2px solid #c3e6cb;
             }
         """)
-        button_layout.addWidget(self.setup_cameras_btn)
         
-        button_layout.addStretch(1)  # Add final stretch
+        # Add the button to the layout!
+        setup_button_layout.addWidget(self.setup_cameras_btn)
         
-        setup_layout.addLayout(button_layout)
+        # Add stretch after button for centering
+        setup_button_layout.addStretch(1)
         
-        left_layout.addWidget(setup_group)
+        setup_container_layout.addWidget(setup_button_container)
+        
+        # Setup description - centered and responsive
+        setup_description = QLabel(
+            "<b>Step 2:</b> Add your cameras to Frigate application and configure detection settings"
+        )
+        setup_description.setWordWrap(True)
+        setup_description.setAlignment(Qt.AlignCenter)
+        setup_description.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        setup_description.setStyleSheet("""
+            QLabel {
+                background: #f0f9f0;
+                color: #166534;
+                padding: 12px 15px;
+                border-radius: 8px;
+                font-size: 13px;
+                border: 1px solid #bbf7d0;
+                margin: 10px 0px;
+            }
+        """)
+        
+        setup_container_layout.addWidget(setup_description)
+        setup_layout.addWidget(setup_container)
+        
+        # Set the camera setup group as the scroll area's widget
+        camera_setup_scroll.setWidget(setup_group)
+        
+        left_layout.addWidget(camera_setup_scroll)
         
         # Quick Actions section - matching Overview tab style
         actions_group = QGroupBox("⚡ Quick Actions")
@@ -4994,15 +5838,15 @@ cameras:
         self.preconfigured_start_btn.setEnabled(False)  # Disabled during initialization
         
         # Stop Frigate button (35% width) 
-        self.preconfigured_stop_btn = QPushButton("⏹️ Stop Frigate")
-        self.preconfigured_stop_btn.clicked.connect(lambda: self.docker_action('stop'))
+        self.preconfigured_stop_btn = QPushButton("⏹️ Stop + Remove")
+        self.preconfigured_stop_btn.clicked.connect(lambda: self.docker_action('remove'))
         self.preconfigured_stop_btn.setMinimumHeight(45)
-        self.preconfigured_stop_btn.setToolTip("Stop Frigate container")
+        self.preconfigured_stop_btn.setToolTip("Stop and remove Frigate container completely")
         self.preconfigured_stop_btn.setEnabled(False)  # Disabled during initialization
         self.preconfigured_stop_btn.setStyleSheet("""
             QPushButton {
                 background: qlineargradient(x1:0, y1:0, x2:0, y2:1, 
-                    stop:0 #dc3545, stop:1 #c82333);
+                    stop:0 #f87171, stop:1 #ef4444);
                 color: white;
                 border: none;
                 border-radius: 8px;
@@ -5013,10 +5857,10 @@ cameras:
             }
             QPushButton:hover:enabled {
                 background: qlineargradient(x1:0, y1:0, x2:0, y2:1, 
-                    stop:0 #e3444e, stop:1 #dc3545);
+                    stop:0 #fca5a5, stop:1 #f87171);
             }
             QPushButton:pressed {
-                background: #bd2130;
+                background: #dc2626;
             }
             QPushButton:disabled {
                 background: #a0aec0;
@@ -5092,6 +5936,71 @@ cameras:
         system_info_layout.addRow("Python Version:", QLabel(platform.python_version()))
         
         right_layout.addWidget(system_info_group)
+        
+        # Troubleshooting section - appears when Docker is running (moved to right panel)
+        self.troubleshooting_group = QGroupBox("🛠️ Having Trouble?")
+        self.troubleshooting_group.setVisible(False)  # Hidden by default, shows when Frigate is running
+        troubleshooting_layout = QVBoxLayout(self.troubleshooting_group)
+        troubleshooting_layout.setSpacing(8)  # Tighter spacing for sidebar
+        troubleshooting_layout.setContentsMargins(8, 8, 8, 8)  # Smaller margins for compact sidebar
+        
+        # Troubleshooting message - more compact for sidebar
+        troubleshooting_message = QLabel(
+            "⚠️ If Frigate isn't working as expected, check the logs for detailed information."
+        )
+        troubleshooting_message.setWordWrap(True)
+        troubleshooting_message.setStyleSheet("""
+            QLabel {
+                background: #fffbf5;
+                color: #fb923c;
+                padding: 10px;
+                border-radius: 6px;
+                font-size: 12px;
+                font-weight: 500;
+                border: 2px solid #fde4cc;
+                margin: 2px 0px;
+            }
+        """)
+        
+        # Button to go to Docker logs - more compact for sidebar and left-aligned
+        button_container = QWidget()
+        button_layout = QHBoxLayout(button_container)
+        button_layout.setContentsMargins(0, 0, 0, 0)
+        button_layout.setSpacing(0)
+        
+        self.view_logs_btn = QPushButton("📋 View Logs")
+        self.view_logs_btn.clicked.connect(self.go_to_docker_logs)
+        self.view_logs_btn.setMinimumHeight(35)
+        self.view_logs_btn.setMaximumWidth(120)  # Limit width to make it smaller
+        self.view_logs_btn.setToolTip("Open Advanced Settings → Docker Logs to view detailed Frigate logs")
+        self.view_logs_btn.setStyleSheet("""
+            QPushButton {
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1, 
+                    stop:0 #fb923c, stop:1 #f97316);
+                color: white;
+                border: none;
+                border-radius: 6px;
+                padding: 8px 12px;
+                font-size: 12px;
+                font-weight: 600;
+                margin: 4px 0px;
+            }
+            QPushButton:hover {
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1, 
+                    stop:0 #fdba74, stop:1 #fb923c);
+            }
+            QPushButton:pressed {
+                background: #ea580c;
+            }
+        """)
+        
+        button_layout.addWidget(self.view_logs_btn)
+        button_layout.addStretch()  # Push button to the left
+        
+        troubleshooting_layout.addWidget(troubleshooting_message)
+        troubleshooting_layout.addWidget(button_container)
+        
+        right_layout.addWidget(self.troubleshooting_group)
         
         right_layout.addStretch()
         
@@ -5730,9 +6639,227 @@ cameras:
         # Create and start the worker
         self.docker_worker = DockerWorker(self.script_dir, action)
         self.docker_worker.progress.connect(self._append_docker_progress)
+        self.docker_worker.progress.connect(self.on_docker_progress_for_button)  # Connect button updates
         self.docker_worker.finished.connect(self.on_docker_finished)
+        
+        # Update button state based on action
+        if action == 'start' or action == 'rebuild':
+            self.update_preconfigured_button_state("building")
+        elif action == 'remove':
+            # For remove action (stop+remove), show stopping state
+            self.update_preconfigured_button_state("stopping")
+            
         self.docker_worker.start()
 
+    def update_preconfigured_button_state(self, state, operation_text=""):
+        """Update the preconfigured Start/Stop Frigate button states with animation"""
+        if not hasattr(self, 'preconfigured_start_btn'):
+            return
+            
+        self.button_operation_state = state
+        
+        if state == "idle":
+            self.button_animation_timer.stop()
+            self.preconfigured_start_btn.setText("▶️ Start Frigate")
+            self.preconfigured_start_btn.setStyleSheet("")  # Reset to default
+            self.preconfigured_start_btn.setEnabled(True)
+            
+            # Reset stop button to default state
+            if hasattr(self, 'preconfigured_stop_btn'):
+                self.preconfigured_stop_btn.setText("⏹️ Stop + Remove")
+                self.preconfigured_stop_btn.setStyleSheet("""
+                    QPushButton {
+                        background: qlineargradient(x1:0, y1:0, x2:0, y2:1, 
+                            stop:0 #f87171, stop:1 #ef4444);
+                        color: white;
+                        border: none;
+                        border-radius: 8px;
+                        padding: 14px 16px;
+                        font-weight: 600;
+                        font-size: 14px;
+                        font-family: 'Segoe UI', 'Inter', sans-serif;
+                    }
+                    QPushButton:hover:enabled {
+                        background: qlineargradient(x1:0, y1:0, x2:0, y2:1, 
+                            stop:0 #fca5a5, stop:1 #f87171);
+                    }
+                    QPushButton:pressed {
+                        background: #dc2626;
+                    }
+                    QPushButton:disabled {
+                        background: #a0aec0;
+                        color: #718096;
+                    }
+                """)
+                self.preconfigured_stop_btn.setEnabled(False)
+            
+        elif state == "building":
+            self.button_base_text = "🔨 Building Image"
+            self.button_animation_dots = 0
+            self.preconfigured_start_btn.setEnabled(False)
+            self.preconfigured_start_btn.setStyleSheet("""
+                QPushButton {
+                    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, 
+                        stop:0 #ff9800, stop:1 #f57c00);
+                    color: white;
+                    border: none;
+                    border-radius: 8px;
+                    padding: 14px 16px;
+                    font-weight: 600;
+                    font-size: 14px;
+                    font-family: 'Segoe UI', 'Inter', sans-serif;
+                }
+            """)
+            self.button_animation_timer.start(500)  # Update every 500ms
+            
+        elif state == "starting":
+            self.button_base_text = "🚀 Starting Container"
+            self.button_animation_dots = 0
+            self.preconfigured_start_btn.setEnabled(False)
+            self.preconfigured_start_btn.setStyleSheet("""
+                QPushButton {
+                    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, 
+                        stop:0 #2196f3, stop:1 #1976d2);
+                    color: white;
+                    border: none;
+                    border-radius: 8px;
+                    padding: 14px 16px;
+                    font-weight: 600;
+                    font-size: 14px;
+                    font-family: 'Segoe UI', 'Inter', sans-serif;
+                }
+            """)
+            self.button_animation_timer.start(500)
+            
+        elif state == "stopping":
+            self.button_base_text = "🛑 Stopping + Removing"
+            self.button_animation_dots = 0
+            self.preconfigured_start_btn.setEnabled(False)
+            
+            # Update stop button state during stopping
+            if hasattr(self, 'preconfigured_stop_btn'):
+                self.stop_button_base_text = "🛑 Stopping + Removing"
+                self.preconfigured_stop_btn.setEnabled(False)
+                self.preconfigured_stop_btn.setStyleSheet("""
+                    QPushButton {
+                        background: qlineargradient(x1:0, y1:0, x2:0, y2:1, 
+                            stop:0 #ff5722, stop:1 #d84315);
+                        color: white;
+                        border: none;
+                        border-radius: 8px;
+                        padding: 14px 16px;
+                        font-weight: 600;
+                        font-size: 14px;
+                        font-family: 'Segoe UI', 'Inter', sans-serif;
+                    }
+                """)
+            self.button_animation_timer.start(500)
+            
+        elif state == "running":
+            self.button_animation_timer.stop()
+            self.preconfigured_start_btn.setText("✅ Frigate Running")
+            self.preconfigured_start_btn.setStyleSheet("""
+                QPushButton {
+                    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, 
+                        stop:0 #4caf50, stop:1 #388e3c);
+                    color: white;
+                    border: none;
+                    border-radius: 8px;
+                    padding: 14px 16px;
+                    font-weight: 600;
+                    font-size: 14px;
+                    font-family: 'Segoe UI', 'Inter', sans-serif;
+                }
+            """)
+            self.preconfigured_start_btn.setEnabled(False)
+            
+            # Enable stop button when running
+            if hasattr(self, 'preconfigured_stop_btn'):
+                self.preconfigured_stop_btn.setText("⏹️ Stop + Remove")
+                self.preconfigured_stop_btn.setEnabled(True)
+                
+        elif state == "stopped":
+            self.button_animation_timer.stop()
+            self.preconfigured_start_btn.setText("▶️ Start Frigate")
+            self.preconfigured_start_btn.setStyleSheet("")  # Reset to default
+            self.preconfigured_start_btn.setEnabled(True)
+            
+            # Update stop button to stopped state
+            if hasattr(self, 'preconfigured_stop_btn'):
+                self.preconfigured_stop_btn.setText("✅ Stopped & Removed")
+                self.preconfigured_stop_btn.setStyleSheet("""
+                    QPushButton {
+                        background: qlineargradient(x1:0, y1:0, x2:0, y2:1, 
+                            stop:0 #6c757d, stop:1 #5a6268);
+                        color: white;
+                        border: none;
+                        border-radius: 8px;
+                        padding: 14px 16px;
+                        font-weight: 600;
+                        font-size: 14px;
+                        font-family: 'Segoe UI', 'Inter', sans-serif;
+                    }
+                """)
+                self.preconfigured_stop_btn.setEnabled(False)
+            
+        elif state == "error":
+            self.button_animation_timer.stop()
+            self.preconfigured_start_btn.setText("❌ Error - Click to Retry")
+            self.preconfigured_start_btn.setStyleSheet("""
+                QPushButton {
+                    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, 
+                        stop:0 #f44336, stop:1 #d32f2f);
+                    color: white;
+                    border: none;
+                    border-radius: 8px;
+                    padding: 14px 16px;
+                    font-weight: 600;
+                    font-size: 14px;
+                    font-family: 'Segoe UI', 'Inter', sans-serif;
+                }
+            """)
+            self.preconfigured_start_btn.setEnabled(True)
+
+    def update_button_animation(self):
+        """Update button text with animated dots"""
+        if not hasattr(self, 'preconfigured_start_btn') or self.button_operation_state == "idle":
+            return
+            
+        # Cycle through different numbers of dots (0, 1, 2, 3, then repeat)
+        self.button_animation_dots = (self.button_animation_dots + 1) % 4
+        dots = "." * self.button_animation_dots
+        
+        # Add padding spaces to keep button width consistent
+        padding = "   " if self.button_animation_dots == 0 else "  " if self.button_animation_dots == 1 else " " if self.button_animation_dots == 2 else ""
+        
+        # Update start button animation
+        if hasattr(self, 'button_base_text'):
+            animated_text = f"{self.button_base_text}{dots}{padding}"
+            self.preconfigured_start_btn.setText(animated_text)
+        
+        # Update stop button animation during stopping state
+        if (self.button_operation_state == "stopping" and 
+            hasattr(self, 'preconfigured_stop_btn') and 
+            hasattr(self, 'stop_button_base_text')):
+            stop_animated_text = f"{self.stop_button_base_text}{dots}{padding}"
+            self.preconfigured_stop_btn.setText(stop_animated_text)
+
+    def on_docker_progress_for_button(self, text):
+        """Handle docker progress updates for button state enhancement"""
+        if not hasattr(self, 'preconfigured_start_btn'):
+            return
+            
+        # Map progress messages to button states
+        text_lower = text.lower()
+        
+        if "building" in text_lower or "build" in text_lower:
+            self.update_preconfigured_button_state("building")
+        elif "starting" in text_lower or "creating" in text_lower:
+            self.update_preconfigured_button_state("starting")
+        elif "started successfully" in text_lower or "frigate is now running" in text_lower:
+            self.update_preconfigured_button_state("running")
+        elif "error" in text_lower or "failed" in text_lower:
+            self.update_preconfigured_button_state("error")
 
     
     def _append_docker_progress(self, text):
@@ -5753,6 +6880,18 @@ cameras:
             print(f"Docker Progress: {formatted_text}")
     
     def on_docker_finished(self, success):
+        # Update button state based on completion
+        if hasattr(self, 'current_docker_action'):
+            action = self.current_docker_action
+            if action == 'start':
+                if success:
+                    self.update_preconfigured_button_state("running")
+                else:
+                    self.update_preconfigured_button_state("error")
+            else:
+                # For other actions, reset to idle state
+                self.update_preconfigured_button_state("idle")
+        
         # Add completion separator
         if hasattr(self, 'docker_progress'):
             self.docker_progress.append("=" * 50)
@@ -5778,8 +6917,11 @@ cameras:
                     QMessageBox.information(self, "Success", "Frigate Docker container rebuilt successfully!")
                 elif self.current_docker_action == 'remove':
                     if hasattr(self, 'docker_progress'):
-                        self.docker_progress.append("🎉 Frigate Docker container removed successfully!")
-                    QMessageBox.information(self, "Success", "Frigate Docker container removed successfully!")
+                        self.docker_progress.append("🎉 Frigate Docker container stopped and removed successfully!")
+                    QMessageBox.information(self, "Success", "Frigate Docker container stopped and removed successfully!")
+                    # Set stopped state for buttons
+                    if hasattr(self, 'preconfigured_start_btn'):
+                        QTimer.singleShot(500, lambda: self.update_preconfigured_button_state("stopped"))
                 else:
                     # Fallback for unknown operations
                     if hasattr(self, 'docker_progress'):
@@ -5896,15 +7038,35 @@ cameras:
         subprocess.Popen(['xdg-open', 'http://localhost:5000'])
     
     def open_config(self):
-        config_script = os.path.join(self.script_dir, 'advanced_config_gui.py')
-        if os.path.exists(config_script):
-            venv_python = os.path.join(self.script_dir, '.venv', 'bin', 'python3')
-            if os.path.exists(venv_python):
-                subprocess.Popen([venv_python, config_script])
-            else:
-                subprocess.Popen([sys.executable, config_script])
-        else:
-            QMessageBox.warning(self, "Error", "Configuration GUI not found!")
+        """Open the advanced configuration GUI"""
+        # Check if application is still initializing
+        if self.is_initializing:
+            QMessageBox.information(
+                self, "Please Wait", 
+                "The application is still initializing. Please wait for the initialization to complete.",
+                QMessageBox.Ok
+            )
+            return
+            
+        if ConfigGUI is None:
+            QMessageBox.critical(
+                self, 'Advanced Config GUI Unavailable',
+                'The Advanced Configuration GUI could not be loaded.\n'
+                'Please ensure advanced_config_gui.py is available in the same directory.'
+            )
+            return
+        
+        try:
+            # Create and show the advanced config GUI (same pattern as simple camera GUI)
+            self.config_gui = ConfigGUI()
+            # Pass reference to this launcher so config GUI can suppress popups if needed
+            self.config_gui.launcher_parent = self
+            self.config_gui.show()
+        except Exception as e:
+            QMessageBox.critical(
+                self, 'Error Opening Config GUI',
+                f'Could not open the Advanced Configuration GUI:\n{str(e)}'
+            )
     
     def edit_config_manual(self):
         config_path = os.path.join(self.script_dir, "frigate", "config", "config.yaml")
@@ -6043,9 +7205,9 @@ mqtt:
   enabled: False
 
 detectors:
-  memryx:
+  memx0:
     type: memryx
-    device: /dev/memx0
+    device: PCIe:0
 
 model:
   model_type: yolo-generic
@@ -6092,15 +7254,15 @@ cameras:
       enabled: false
       bounding_box: true
       retain:
-        default: 1  # Keep snapshots for 2 days
+        default: 0  # Keep snapshots for 2 days
     record:
       enabled: false
       alerts:
         retain:
-          days: 1
+          days: 0
       detections:
         retain:
-          days: 1
+          days: 0
 
 version: 0.17-0
 
