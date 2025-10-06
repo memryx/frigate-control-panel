@@ -3302,7 +3302,6 @@ class FrigateLauncher(QMainWindow):
             font-weight: 700;
             color: white;
             background: none;
-            text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
         """)
         
         subtitle_label = QLabel("Complete step-by-step setup instructions")
@@ -3478,7 +3477,6 @@ class FrigateLauncher(QMainWindow):
                 }
                 QFrame:hover {
                     border: 1px solid #cbd5e0;
-                    box-shadow: 0 4px 12px rgba(0,0,0,0.1);
                 }
             """)
             
@@ -3523,7 +3521,7 @@ class FrigateLauncher(QMainWindow):
             points_layout.setSpacing(3)
             
             for point in step["points"]:
-                point_label = QLabel(f"<span style='color: #0694a2; font-weight: bold;'>▸</span> {point}")
+                point_label = QLabel(f"<span style='color: #0694a2; font-weight: bold;'>•</span> {point}")
                 point_label.setStyleSheet("""
                     font-family: 'Segoe UI', Arial, sans-serif;
                     font-size: 15px;
@@ -3584,7 +3582,6 @@ class FrigateLauncher(QMainWindow):
             font-size: 24px;
             font-weight: 700;
             color: white;
-            text-shadow: 1px 1px 2px rgba(0,0,0,0.3);
         """)
         
         credentials_text = QLabel("Your camera credentials: Username: admin | Password: [your secure password]")
@@ -3670,7 +3667,6 @@ class FrigateLauncher(QMainWindow):
                 }
                 QFrame:hover {
                     border: 1px solid #cbd5e0;
-                    box-shadow: 0 4px 12px rgba(0,0,0,0.1);
                 }
             """)
             
@@ -3715,7 +3711,7 @@ class FrigateLauncher(QMainWindow):
             points_layout.setSpacing(3)
             
             for point in step["points"]:
-                point_label = QLabel(f"<span style='color: #0694a2; font-weight: bold;'>▸</span> {point}")
+                point_label = QLabel(f"<span style='color: #0694a2; font-weight: bold;'>•</span> {point}")
                 point_label.setStyleSheet("""
                     font-family: 'Segoe UI', Arial, sans-serif;
                     font-size: 15px;
@@ -3785,7 +3781,7 @@ class FrigateLauncher(QMainWindow):
         
         trouble_layout.addWidget(trouble_title)
         for point in trouble_points:
-            point_label = QLabel(f"▸ {point}")
+            point_label = QLabel(f"• {point}")
             point_label.setStyleSheet("""
                 font-family: 'Segoe UI', Arial, sans-serif;
                 font-size: 14px;
@@ -3826,12 +3822,10 @@ class FrigateLauncher(QMainWindow):
                 font-family: 'Segoe UI', Arial, sans-serif;
                 font-size: 16px;
                 font-weight: 600;
-                text-shadow: 1px 1px 2px rgba(0,0,0,0.3);
             }
             QPushButton:hover {
                 background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
                     stop: 0 #0891b2, stop: 1 #134e4a);
-                transform: translateY(-1px);
             }
             QPushButton:pressed {
                 background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
@@ -5796,7 +5790,8 @@ cameras:
         
         # Setup description - centered and responsive
         setup_description = QLabel(
-            "<b>Step 2:</b> Add your cameras to Frigate application and configure detection settings"
+            "<b>Step 2:</b> Add your cameras to Frigate application and configure detection settings. "
+            "Once set up, <b>click the Start Frigate button below</b>."
         )
         setup_description.setWordWrap(True)
         setup_description.setAlignment(Qt.AlignCenter)
