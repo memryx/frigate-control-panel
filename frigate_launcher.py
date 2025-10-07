@@ -1630,8 +1630,16 @@ class CameraSetupWelcomeDialog(QDialog):
         self.setModal(True)
         self.resize(750, 550)  # Smaller size as requested
         
-        # Disable close button and escape key - user must make a choice
-        self.setWindowFlags(Qt.Dialog | Qt.CustomizeWindowHint | Qt.WindowTitleHint)
+        # Strengthen window flags to ensure close button is removed - user must make a choice
+        self.setWindowFlags(
+            Qt.Dialog | 
+            Qt.CustomizeWindowHint | 
+            Qt.WindowTitleHint |
+            Qt.WindowSystemMenuHint
+        )
+        # Explicitly disable close button and context menu
+        self.setWindowFlag(Qt.WindowCloseButtonHint, False)
+        self.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
         
         # Main layout
         layout = QVBoxLayout(self)
