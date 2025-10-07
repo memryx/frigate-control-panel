@@ -1616,6 +1616,185 @@ class CameraSetupWizard(QDialog):
                 configs.append(camera_widget.get_config())
         return configs
 
+class CameraSetupWelcomeDialog(QDialog):
+    """First-run welcome dialog for camera setup"""
+    
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.start_setup_requested = False
+        self.setup_complete_requested = False
+        self.setup_ui()
+    
+    def setup_ui(self):
+        self.setWindowTitle("🎥 Welcome to MemryX + Frigate")
+        self.setModal(True)
+        self.resize(750, 550)  # Smaller size as requested
+        
+        # Disable close button and escape key - user must make a choice
+        self.setWindowFlags(Qt.Dialog | Qt.CustomizeWindowHint | Qt.WindowTitleHint)
+        
+        # Main layout
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+        
+        # Header with gradient background
+        header_frame = QFrame()
+        header_frame.setStyleSheet("""
+            QFrame {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
+                    stop:0 #4299e1, stop:0.5 #3182ce, stop:1 #2c6b7d);
+                border: none;
+                border-bottom: 3px solid rgba(0,0,0,0.1);
+            }
+        """)
+        header_layout = QVBoxLayout(header_frame)
+        header_layout.setContentsMargins(50, 40, 50, 40)
+        header_layout.setSpacing(15)
+        
+        # Welcome title with smaller size
+        title = QLabel("🎥 Welcome to Your MemryX + Frigate Box!")
+        title.setFont(QFont("Segoe UI", 28, QFont.Bold))
+        title.setAlignment(Qt.AlignCenter)
+        title.setStyleSheet("""
+            color: white; 
+            margin-bottom: 15px;
+            font-weight: 800;
+        """)
+        
+        header_layout.addWidget(title)
+        layout.addWidget(header_frame)
+        
+        # Content area
+        content_frame = QFrame()
+        content_frame.setStyleSheet("""
+            QFrame {
+                background: white;
+                border: none;
+            }
+        """)
+        content_layout = QVBoxLayout(content_frame)
+        content_layout.setContentsMargins(60, 50, 60, 50)
+        content_layout.setSpacing(30)
+        
+        # Main message with smaller text
+        message = QLabel()
+        message.setWordWrap(True)
+        message.setFont(QFont("Segoe UI", 14))
+        message.setText(
+            "🎯 To get started, first you need to setup your cameras.\n\n"
+            "📋 Use this guide to setup first."
+        )
+        message.setStyleSheet("""
+            QLabel {
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 #f8faff, stop:1 #eef4ff);
+                color: #1a365d;
+                padding: 30px;
+                border-radius: 12px;
+                border: 2px solid #bee3f8;
+                line-height: 1.6;
+            }
+        """)
+        message.setAlignment(Qt.AlignCenter)
+        content_layout.addWidget(message)
+        
+        # Button area
+        button_frame = QFrame()
+        button_layout = QVBoxLayout(button_frame)
+        button_layout.setSpacing(15)
+        button_layout.setContentsMargins(40, 20, 40, 20)  # Add horizontal margins
+        
+        # Start Setup button - simplified to ensure text shows
+        self.start_setup_btn = QPushButton("🚀 Start Camera Setup")
+        self.start_setup_btn.setFont(QFont("Segoe UI", 14, QFont.Bold))
+        self.start_setup_btn.setMinimumHeight(70)
+        self.start_setup_btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.start_setup_btn.clicked.connect(self.start_camera_setup)
+        self.start_setup_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #22c55e;
+                color: white;
+                border: none;
+                border-radius: 12px;
+                padding: 15px 25px;
+                margin: 10px 5px;
+                font-weight: bold;
+                font-size: 14px;
+            }
+            QPushButton:hover {
+                background-color: #16a34a;
+            }
+            QPushButton:pressed {
+                background-color: #15803d;
+            }
+        """)
+        
+        # Already Setup button - simplified to ensure text shows
+        self.already_setup_btn = QPushButton("✅ Skip - Already Configured")
+        self.already_setup_btn.setFont(QFont("Segoe UI", 12, QFont.Bold))
+        self.already_setup_btn.setMinimumHeight(50)
+        self.already_setup_btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.already_setup_btn.clicked.connect(self.mark_setup_complete)
+        self.already_setup_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #64748b;
+                color: white;
+                border: none;
+                border-radius: 10px;
+                padding: 12px 20px;
+                margin: 5px;
+                font-weight: bold;
+                font-size: 12px;
+            }
+            QPushButton:hover {
+                background-color: #475569;
+            }
+            QPushButton:pressed {
+                background-color: #334155;
+            }
+        """)
+        
+        button_layout.addWidget(self.start_setup_btn)
+        button_layout.addWidget(self.already_setup_btn)
+        content_layout.addWidget(button_frame)
+        
+        # Footer note with smaller text
+        footer_note = QLabel(
+            "💡 Don't worry - you can always access the camera setup guide later from the main screen."
+        )
+        footer_note.setFont(QFont("Segoe UI", 11))
+        footer_note.setAlignment(Qt.AlignCenter)
+        footer_note.setStyleSheet("""
+            QLabel {
+                color: #64748b;
+                padding: 15px 20px;
+                background: rgba(148, 163, 184, 0.1);
+                border-radius: 8px;
+                margin: 8px 15px;
+                font-style: italic;
+            }
+        """)
+        content_layout.addWidget(footer_note)
+        
+        layout.addWidget(content_frame)
+    
+    def start_camera_setup(self):
+        """Handle start camera setup button click"""
+        self.start_setup_requested = True
+        self.accept()
+    
+    def mark_setup_complete(self):
+        """Handle already setup complete button click"""
+        self.setup_complete_requested = True
+        self.accept()
+    
+    def keyPressEvent(self, event):
+        """Override to prevent Escape key from closing the dialog"""
+        # Ignore Escape key - user must choose an option
+        if event.key() != Qt.Key_Escape:
+            super().keyPressEvent(event)
+
 class CameraConfigWidget(QFrame):
     """Widget for configuring a single camera"""
     
@@ -1817,6 +1996,10 @@ class FrigateLauncher(QMainWindow):
         self.script_dir = os.path.dirname(os.path.abspath(__file__))
         self.config_file_mtime = 0  # Track config file modification time
         self.suppress_config_change_popup = False  # Flag to suppress config change popup
+        
+        # Setup completion tracking
+        self.setup_complete_file = os.path.join(self.script_dir, '.camera_setup_complete')
+        self.is_first_run = not os.path.exists(self.setup_complete_file)
 
         # Initialize worker thread reference
         self.docker_worker = None
@@ -1896,6 +2079,47 @@ class FrigateLauncher(QMainWindow):
         
         # Defer heavy operations until after UI is shown to improve startup time
         QTimer.singleShot(100, self._initialize_async_components)
+    
+    def mark_setup_complete(self):
+        """Mark the initial setup as complete to prevent the welcome dialog from showing again"""
+        try:
+            with open(self.setup_complete_file, 'w') as f:
+                f.write(f"Camera setup completed on: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+            self.is_first_run = False
+        except Exception as e:
+            print(f"Warning: Could not save setup completion status: {e}")
+    
+    def reset_setup_status(self):
+        """Reset setup status to force the welcome dialog to appear again (for testing/reset)"""
+        try:
+            if os.path.exists(self.setup_complete_file):
+                os.remove(self.setup_complete_file)
+            self.is_first_run = True
+        except Exception as e:
+            print(f"Warning: Could not reset setup status: {e}")
+    
+    def show_first_run_welcome(self):
+        """Show the first-run welcome dialog if this is a first run"""
+        if self.is_first_run:
+            # Use QTimer to show dialog after main window is fully loaded
+            QTimer.singleShot(200, self._show_welcome_dialog)
+    
+    def _show_welcome_dialog(self):
+        """Internal method to show the welcome dialog"""
+        dialog = CameraSetupWelcomeDialog(self)
+        result = dialog.exec()
+        
+        if result == QDialog.Accepted:
+            # User clicked "Start Camera Setup"
+            if dialog.start_setup_requested:
+                self.show_camera_setup_guide()
+            elif dialog.setup_complete_requested:
+                self.mark_setup_complete()
+                QMessageBox.information(
+                    self, 'Setup Complete',
+                    'Great! Your system is ready to go.\n\n'
+                    'You can always access the camera setup guide from the PreConfigured Box tab.'
+                )
     
     def setup_ui(self):
         self.setWindowTitle("MemryX + Frigate Launcher - Full Control Center")
@@ -2251,6 +2475,16 @@ class FrigateLauncher(QMainWindow):
         check_status_action.setStatusTip('Refresh system and Docker status')
         check_status_action.triggered.connect(self.check_system_status)
         
+        # Setup reset action (for testing/debugging)
+        reset_setup_action = tools_menu.addAction('&Reset First-Run Setup')
+        reset_setup_action.setStatusTip('Reset first-run setup to show welcome dialog again')
+        reset_setup_action.triggered.connect(self.reset_setup_status_with_confirmation)
+        
+        # Manual trigger for welcome dialog (for testing)
+        show_welcome_action = tools_menu.addAction('&Show Welcome Dialog')
+        show_welcome_action.setStatusTip('Manually show the camera setup welcome dialog')
+        show_welcome_action.triggered.connect(self._show_welcome_dialog)
+        
         clear_logs_action = tools_menu.addAction('&Clear Progress Logs')
         clear_logs_action.setShortcut('Ctrl+L')
         clear_logs_action.setStatusTip('Clear the progress logs in Docker Manager tab')
@@ -2360,6 +2594,24 @@ class FrigateLauncher(QMainWindow):
         about_action.setStatusTip('About this application')
         about_action.triggered.connect(self.show_about)
     
+    def reset_setup_status_with_confirmation(self):
+        """Reset setup status with user confirmation"""
+        reply = QMessageBox.question(
+            self, 'Reset First-Run Setup',
+            'This will reset the first-run setup status and show the welcome dialog on next startup.\n\n'
+            'Are you sure you want to reset the setup status?',
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No
+        )
+        
+        if reply == QMessageBox.Yes:
+            self.reset_setup_status()
+            QMessageBox.information(
+                self, 'Setup Reset',
+                'First-run setup status has been reset.\n\n'
+                'The welcome dialog will appear the next time you start the application.'
+            )
+    
     def close_application(self):
         """Close the application with confirmation"""
         reply = QMessageBox.question(
@@ -2409,6 +2661,9 @@ class FrigateLauncher(QMainWindow):
         
         # Hide status bar after a delay
         QTimer.singleShot(3000, lambda: self.statusBar().hide())
+        
+        # Show first-run welcome dialog if this is the first time
+        self.show_first_run_welcome()
 
     def start_background_status_check(self):
         """Start status checking in background thread"""
@@ -3081,6 +3336,18 @@ class FrigateLauncher(QMainWindow):
                 except:
                     container_running = False
             
+            # Track container status changes to show Web UI guidance
+            if not hasattr(self, '_previous_container_running'):
+                self._previous_container_running = False
+            
+            # Check if container just started running (transition from not running to running)
+            if not self._previous_container_running and container_running:
+                # Container just started running - show Web UI guidance after a short delay
+                QTimer.singleShot(3000, self.show_web_ui_guidance)  # 3 second delay
+            
+            # Update the previous state
+            self._previous_container_running = container_running
+            
             # Update button states using enhanced state management
             if hasattr(self, 'preconfigured_start_btn') and hasattr(self, 'preconfigured_stop_btn'):
                 # Skip if currently in an operation state (building, starting, stopping)
@@ -3108,9 +3375,15 @@ class FrigateLauncher(QMainWindow):
                 if container_running:
                     self.preconfigured_open_ui_btn.setEnabled(True)
                     self.preconfigured_open_ui_btn.setToolTip("Open Frigate Web UI (Frigate is running)")
+                    # Reset any highlighting style that might have been applied
+                    if hasattr(self, '_web_ui_btn_original_style'):
+                        self.preconfigured_open_ui_btn.setStyleSheet(self._web_ui_btn_original_style)
                 else:
                     self.preconfigured_open_ui_btn.setEnabled(False)
                     self.preconfigured_open_ui_btn.setToolTip("Start Frigate first to access Web UI")
+                    # Reset any highlighting style when disabled
+                    if hasattr(self, '_web_ui_btn_original_style'):
+                        self.preconfigured_open_ui_btn.setStyleSheet(self._web_ui_btn_original_style)
             
             # Show/hide troubleshooting section based on container status
             if hasattr(self, 'troubleshooting_group'):
@@ -3243,6 +3516,24 @@ class FrigateLauncher(QMainWindow):
             self.camera_gui = SimpleCameraGUI()
             # Pass reference to this launcher so camera GUI can suppress popups
             self.camera_gui.launcher_parent = self
+            
+            # Wrap the save_config method to detect successful saves
+            original_save_config = self.camera_gui.save_config
+            
+            def enhanced_save_config():
+                try:
+                    # Call the original save_config method
+                    original_save_config()
+                    # If we get here, save was successful (no exception thrown)
+                    # Trigger our guidance dialog
+                    self.on_camera_config_saved()
+                except Exception as e:
+                    # If save failed, re-raise the exception to maintain original behavior
+                    raise e
+            
+            # Replace the save_config method with our enhanced version
+            self.camera_gui.save_config = enhanced_save_config
+            
             self.camera_gui.show()
         except Exception as e:
             QMessageBox.critical(
@@ -3250,11 +3541,321 @@ class FrigateLauncher(QMainWindow):
                 f'Could not open the Simple Camera GUI:\n{str(e)}'
             )
 
+    def on_camera_gui_closed(self):
+        """Handle when camera GUI is closed - no longer shows guidance"""
+        # Removed automatic guidance on close
+        # Guidance now only shows when config is actually saved
+        pass
+
+    def on_camera_config_saved(self):
+        """Handle when camera configuration is saved - show guidance to start Frigate"""
+        # Small delay to ensure the save operation is complete
+        QTimer.singleShot(500, self.show_start_frigate_guidance)
+
+    def show_start_frigate_guidance(self):
+        """Show guidance dialog to start Frigate after camera configuration"""
+        guidance_dialog = QDialog(self)
+        guidance_dialog.setWindowTitle("Cameras Configured!")
+        guidance_dialog.setFixedSize(500, 350)
+        guidance_dialog.setModal(True)
+        
+        # Create layout
+        layout = QVBoxLayout(guidance_dialog)
+        layout.setSpacing(20)
+        layout.setContentsMargins(30, 30, 30, 30)
+        
+        # Icon and title
+        title_layout = QHBoxLayout()
+        
+        # Icon label
+        icon_label = QLabel("🎉")
+        icon_label.setStyleSheet("font-size: 32px;")
+        title_layout.addWidget(icon_label)
+        
+        # Title
+        title_label = QLabel("Great! Cameras Configured!")
+        title_label.setStyleSheet("""
+            font-family: 'Segoe UI', Arial, sans-serif;
+            font-size: 18px;
+            font-weight: 700;
+            color: #0694a2;
+            margin-left: 10px;
+        """)
+        title_layout.addWidget(title_label)
+        title_layout.addStretch()
+        
+        layout.addLayout(title_layout)
+        
+        # Guidance text
+        guidance_text = QLabel(
+            "Your cameras are now configured. 🎥<br><br>"
+            "Now it's time for the final step:<br><br>"
+            "🚀 <b>Click the \"Start Frigate\" button</b> to begin monitoring your cameras!<br><br>"
+        )
+        guidance_text.setTextFormat(Qt.RichText)
+        guidance_text.setStyleSheet("""
+            font-family: 'Segoe UI', Arial, sans-serif;
+            font-size: 14px;
+            color: #2d3748;
+            line-height: 1.5;
+            padding: 15px;
+            background: #f0fff4;
+            border-radius: 8px;
+            border-left: 4px solid #0694a2;
+        """)
+        guidance_text.setWordWrap(True)
+        layout.addWidget(guidance_text)
+        
+        # Buttons
+        button_layout = QHBoxLayout()
+        
+        # Highlight button
+        highlight_btn = QPushButton("🔥 Show Me Start Frigate")
+        highlight_btn.setStyleSheet("""
+            QPushButton {
+                background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
+                    stop: 0 #0694a2, stop: 1 #0f766e);
+                color: white;
+                border: none;
+                border-radius: 6px;
+                font-family: 'Segoe UI', Arial, sans-serif;
+                font-size: 13px;
+                font-weight: 600;
+                padding: 8px 16px;
+            }
+            QPushButton:hover {
+                background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
+                    stop: 0 #0891b2, stop: 1 #164e63);
+            }
+        """)
+        highlight_btn.clicked.connect(lambda: self.highlight_start_frigate_button(guidance_dialog))
+        
+        # Got it button
+        got_it_btn = QPushButton("Let's Go!")
+        got_it_btn.setStyleSheet("""
+            QPushButton {
+                background: #e2e8f0;
+                color: #2d3748;
+                border: 1px solid #cbd5e0;
+                border-radius: 6px;
+                font-family: 'Segoe UI', Arial, sans-serif;
+                font-size: 13px;
+                font-weight: 600;
+                padding: 8px 16px;
+            }
+            QPushButton:hover {
+                background: #cbd5e0;
+            }
+        """)
+        got_it_btn.clicked.connect(guidance_dialog.accept)
+        
+        button_layout.addWidget(highlight_btn)
+        button_layout.addStretch()
+        button_layout.addWidget(got_it_btn)
+        
+        layout.addLayout(button_layout)
+        
+        # Show guidance dialog
+        guidance_dialog.exec()
+
+    def highlight_start_frigate_button(self, guidance_dialog):
+        """Highlight the Start Frigate button"""
+        guidance_dialog.accept()  # Close guidance dialog
+        
+        # Find the Start Frigate button and highlight it
+        if hasattr(self, 'preconfigured_start_btn'):
+            # Store original stylesheet
+            original_style = self.preconfigured_start_btn.styleSheet()
+            
+            # Apply highlight style
+            highlight_style = """
+                QPushButton {
+                    background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
+                        stop: 0 #c084fc, stop: 1 #a855f7);
+                    color: white;
+                    border: 3px solid #c084fc;
+                    border-radius: 8px;
+                    font-family: 'Segoe UI', Arial, sans-serif;
+                    font-size: 16px;
+                    font-weight: 700;
+                    text-align: center;
+                    padding: 8px;
+                }
+                QPushButton:hover {
+                    background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
+                        stop: 0 #ddd6fe, stop: 1 #8b5cf6);
+                }
+            """
+            
+            self.preconfigured_start_btn.setStyleSheet(highlight_style)
+            
+            # Reset to original style after 5 seconds
+            QTimer.singleShot(5000, lambda: self.preconfigured_start_btn.setStyleSheet(original_style))
+
+    def show_web_ui_guidance(self):
+        """Show guidance dialog to open Frigate Web UI after Frigate starts"""
+        # Check if we should show this guidance (not shown before)
+        web_ui_guidance_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), '.web_ui_guidance_shown')
+        if os.path.exists(web_ui_guidance_file):
+            return  # Don't show again
+        
+        guidance_dialog = QDialog(self)
+        guidance_dialog.setWindowTitle("Frigate is Now Running!")
+        guidance_dialog.setFixedSize(520, 350)
+        guidance_dialog.setModal(True)
+        
+        # Create layout
+        layout = QVBoxLayout(guidance_dialog)
+        layout.setSpacing(20)
+        layout.setContentsMargins(30, 30, 30, 30)
+        
+        # Icon and title
+        title_layout = QHBoxLayout()
+        
+        # Icon label
+        icon_label = QLabel("🎉")
+        icon_label.setStyleSheet("font-size: 32px;")
+        title_layout.addWidget(icon_label)
+        
+        # Title
+        title_label = QLabel("Frigate is Now Running!")
+        title_label.setStyleSheet("""
+            font-family: 'Segoe UI', Arial, sans-serif;
+            font-size: 18px;
+            font-weight: 700;
+            color: #0694a2;
+            margin-left: 10px;
+        """)
+        title_layout.addWidget(title_label)
+        title_layout.addStretch()
+        
+        layout.addLayout(title_layout)
+        
+        # Guidance text
+        guidance_text = QLabel(
+            "🚀 Frigate has started successfully!<br><br>"
+            "🌐 Click the <b>\"Open Frigate Web UI\" button</b> to view your camera feeds and manage settings.<br><br>"
+        )
+        guidance_text.setTextFormat(Qt.RichText)
+        guidance_text.setStyleSheet("""
+            font-family: 'Segoe UI', Arial, sans-serif;
+            font-size: 14px;
+            color: #2d3748;
+            line-height: 1.5;
+            padding: 15px;
+            background: #f0fff4;
+            border-radius: 8px;
+            border-left: 4px solid #0694a2;
+        """)
+        guidance_text.setWordWrap(True)
+        layout.addWidget(guidance_text)
+        
+        # Buttons
+        button_layout = QHBoxLayout()
+        
+        # Highlight button
+        highlight_btn = QPushButton("🔍 Show Me Web UI Button")
+        highlight_btn.setStyleSheet("""
+            QPushButton {
+                background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
+                    stop: 0 #0694a2, stop: 1 #0f766e);
+                color: white;
+                border: none;
+                border-radius: 6px;
+                font-family: 'Segoe UI', Arial, sans-serif;
+                font-size: 13px;
+                font-weight: 600;
+                padding: 8px 16px;
+            }
+            QPushButton:hover {
+                background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
+                    stop: 0 #0891b2, stop: 1 #164e63);
+            }
+        """)
+        highlight_btn.clicked.connect(lambda: self.highlight_web_ui_button(guidance_dialog))
+        
+        # Got it button
+        got_it_btn = QPushButton("Got It!")
+        got_it_btn.setStyleSheet("""
+            QPushButton {
+                background: #e2e8f0;
+                color: #2d3748;
+                border: 1px solid #cbd5e0;
+                border-radius: 6px;
+                font-family: 'Segoe UI', Arial, sans-serif;
+                font-size: 13px;
+                font-weight: 600;
+                padding: 8px 16px;
+            }
+            QPushButton:hover {
+                background: #cbd5e0;
+            }
+        """)
+        got_it_btn.clicked.connect(lambda: self.close_web_ui_guidance(guidance_dialog, web_ui_guidance_file))
+        
+        button_layout.addWidget(highlight_btn)
+        button_layout.addStretch()
+        button_layout.addWidget(got_it_btn)
+        
+        layout.addLayout(button_layout)
+        
+        # Show guidance dialog
+        guidance_dialog.exec()
+
+    def highlight_web_ui_button(self, guidance_dialog):
+        """Highlight the Open Frigate Web UI button"""
+        guidance_dialog.accept()  # Close guidance dialog
+        
+        # Find the Web UI button and highlight it
+        if hasattr(self, 'preconfigured_open_ui_btn'):
+            # Store original stylesheet for proper restoration
+            self._web_ui_btn_original_style = self.preconfigured_open_ui_btn.styleSheet()
+            
+            # Apply highlight style
+            highlight_style = """
+                QPushButton {
+                    background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
+                        stop: 0 #c084fc, stop: 1 #a855f7);
+                    color: white;
+                    border: 3px solid #c084fc;
+                    border-radius: 8px;
+                    font-family: 'Segoe UI', Arial, sans-serif;
+                    font-size: 16px;
+                    font-weight: 700;
+                    text-align: center;
+                    padding: 8px;
+                }
+                QPushButton:hover {
+                    background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
+                        stop: 0 #ddd6fe, stop: 1 #8b5cf6);
+                }
+                QPushButton:disabled {
+                    background: #e2e8f0;
+                    color: #a0aec0;
+                    border: 1px solid #cbd5e0;
+                }
+            """
+            
+            self.preconfigured_open_ui_btn.setStyleSheet(highlight_style)
+            
+            # Reset to original style after 5 seconds
+            QTimer.singleShot(5000, lambda: self.preconfigured_open_ui_btn.setStyleSheet(self._web_ui_btn_original_style))
+
+    def close_web_ui_guidance(self, dialog, guidance_file):
+        """Close the Web UI guidance and mark as shown"""
+        dialog.accept()
+        # Create file to mark that guidance has been shown
+        try:
+            with open(guidance_file, 'w') as f:
+                f.write("shown")
+        except:
+            pass  # Ignore errors creating the tracking file
+
     def show_camera_setup_guide(self):
         """Display the camera setup guide in a professional dialog with modern styling"""
         dialog = QDialog(self)
         dialog.setWindowTitle("Camera Setup Guide")
-        dialog.resize(1300, 900)
+        dialog.resize(1100, 800)  # Slightly smaller for better fit
         dialog.setStyleSheet("""
             QDialog {
                 background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
@@ -3269,36 +3870,36 @@ class FrigateLauncher(QMainWindow):
         
         # Modern header with gradient and shadow
         header_frame = QFrame()
-        header_frame.setFixedHeight(100)
+        header_frame.setFixedHeight(85)  # Smaller header
         header_frame.setStyleSheet("""
             QFrame {
                 background: qlineargradient(x1: 0, y1: 0, x2: 1, y2: 1,
                     stop: 0 #0694a2, stop: 1 #0f766e);
                 border: none;
-                border-bottom: 3px solid rgba(0,0,0,0.1);
+                border-bottom: 2px solid rgba(0,0,0,0.15);
             }
         """)
         
         header_layout = QHBoxLayout(header_frame)
-        header_layout.setContentsMargins(30, 20, 30, 20)
+        header_layout.setContentsMargins(25, 15, 25, 15)
         
         # Header icon and title
         icon_label = QLabel("📹")
         icon_label.setStyleSheet("""
-            font-size: 32px;
+            font-size: 28px;
             color: white;
-            background: rgba(255,255,255,0.1);
-            border-radius: 25px;
-            padding: 8px;
-            margin-right: 15px;
+            background: rgba(255,255,255,0.15);
+            border-radius: 20px;
+            padding: 6px;
+            margin-right: 12px;
         """)
-        icon_label.setFixedSize(50, 50)
+        icon_label.setFixedSize(40, 40)
         icon_label.setAlignment(Qt.AlignCenter)
         
         title_label = QLabel("Camera Setup Guide")
         title_label.setStyleSheet("""
             font-family: 'Segoe UI', 'SF Pro Display', Arial, sans-serif;
-            font-size: 28px;
+            font-size: 24px;
             font-weight: 700;
             color: white;
             background: none;
@@ -3307,10 +3908,10 @@ class FrigateLauncher(QMainWindow):
         subtitle_label = QLabel("Complete step-by-step setup instructions")
         subtitle_label.setStyleSheet("""
             font-family: 'Segoe UI', Arial, sans-serif;
-            font-size: 16px;
+            font-size: 14px;
             color: rgba(255,255,255,0.9);
             background: none;
-            margin-top: 5px;
+            margin-top: 3px;
         """)
         
         title_container = QVBoxLayout()
@@ -3351,8 +3952,8 @@ class FrigateLauncher(QMainWindow):
         
         content_widget = QWidget()
         content_layout = QVBoxLayout(content_widget)
-        content_layout.setContentsMargins(40, 30, 40, 30)
-        content_layout.setSpacing(25)
+        content_layout.setContentsMargins(30, 20, 30, 20)  # Reduced margins
+        content_layout.setSpacing(18)  # Tighter spacing
         
         # Get cam_assets directory
         cam_assets_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cam_assets")
@@ -3401,7 +4002,7 @@ class FrigateLauncher(QMainWindow):
                 "description": "Select WiFi configuration setup option.",
                 "points": [
                     "Choose WiFi configuration setup",
-                    "Important: Your phone must be connected to the WiFi network you want the camera to use"
+                    "<b>Important: Your phone must be connected to the WiFi network you want the camera to use</b>"
                 ],
                 "image": "setup_4.jpg"
             },
@@ -3471,18 +4072,19 @@ class FrigateLauncher(QMainWindow):
                 QFrame {
                     background: white;
                     border: 1px solid #e2e8f0;
-                    border-radius: 12px;
+                    border-radius: 10px;
                     padding: 0;
-                    margin: 5px 0;
+                    margin: 3px 0;
                 }
                 QFrame:hover {
-                    border: 1px solid #cbd5e0;
+                    border: 1px solid #0694a2;
+                    background: #f8faff;
                 }
             """)
             
             step_layout = QHBoxLayout(step_frame)
-            step_layout.setContentsMargins(20, 15, 20, 15)
-            step_layout.setSpacing(20)
+            step_layout.setContentsMargins(18, 12, 18, 12)
+            step_layout.setSpacing(16)
             
             # Left content area
             left_content = QVBoxLayout()
@@ -3567,19 +4169,19 @@ class FrigateLauncher(QMainWindow):
                 background: qlineargradient(x1: 0, y1: 0, x2: 1, y2: 0,
                     stop: 0 #0694a2, stop: 1 #0f766e);
                 border: none;
-                border-radius: 12px;
-                padding: 20px;
-                margin: 10px 0;
+                border-radius: 10px;
+                padding: 15px;
+                margin: 8px 0;
             }
         """)
         
         completion_layout = QVBoxLayout(completion_frame)
-        completion_layout.setSpacing(10)
+        completion_layout.setSpacing(8)
         
         completion_title = QLabel("🎉 SETUP COMPLETE!")
         completion_title.setStyleSheet("""
             font-family: 'Segoe UI', Arial, sans-serif;
-            font-size: 24px;
+            font-size: 18px;
             font-weight: 700;
             color: white;
         """)
@@ -3661,12 +4263,13 @@ class FrigateLauncher(QMainWindow):
                 QFrame {
                     background: white;
                     border: 1px solid #e2e8f0;
-                    border-radius: 12px;
+                    border-radius: 10px;
                     padding: 0;
-                    margin: 5px 0;
+                    margin: 3px 0;
                 }
                 QFrame:hover {
-                    border: 1px solid #cbd5e0;
+                    border: 1px solid #0694a2;
+                    background: #f9fafb;
                 }
             """)
             
@@ -3754,8 +4357,8 @@ class FrigateLauncher(QMainWindow):
         trouble_frame = QFrame()
         trouble_frame.setStyleSheet("""
             QFrame {
-                background: #fed7d7;
-                border: 1px solid #fc8181;
+                background: #fef2f2;
+                border: 1px solid #fca5a5;
                 border-radius: 12px;
                 padding: 15px;
                 margin: 10px 0;
@@ -3766,10 +4369,10 @@ class FrigateLauncher(QMainWindow):
         trouble_title = QLabel("🛠️ Quick Troubleshooting")
         trouble_title.setStyleSheet("""
             font-family: 'Segoe UI', Arial, sans-serif;
-            font-size: 18px;
+            font-size: 16px;
             font-weight: 700;
-            color: #9b2c2c;
-            margin-bottom: 8px;
+            color: #b91c1c;
+            margin-bottom: 6px;
         """)
         
         trouble_points = [
@@ -3784,9 +4387,9 @@ class FrigateLauncher(QMainWindow):
             point_label = QLabel(f"• {point}")
             point_label.setStyleSheet("""
                 font-family: 'Segoe UI', Arial, sans-serif;
-                font-size: 14px;
-                color: #9b2c2c;
-                padding: 3px 0;
+                font-size: 13px;
+                color: #b91c1c;
+                padding: 2px 0;
             """)
             point_label.setWordWrap(True)
             trouble_layout.addWidget(point_label)
@@ -3798,7 +4401,7 @@ class FrigateLauncher(QMainWindow):
         
         # Modern footer with close button
         footer_frame = QFrame()
-        footer_frame.setFixedHeight(80)
+        footer_frame.setFixedHeight(70)  # Smaller footer
         footer_frame.setStyleSheet("""
             QFrame {
                 background: white;
@@ -3807,38 +4410,187 @@ class FrigateLauncher(QMainWindow):
         """)
         
         footer_layout = QHBoxLayout(footer_frame)
-        footer_layout.setContentsMargins(25, 18, 25, 18)
+        footer_layout.setContentsMargins(20, 15, 20, 15)
         footer_layout.addStretch()
         
         close_btn = QPushButton("✕ Close Guide")
-        close_btn.setFixedSize(160, 45)
+        close_btn.setFixedSize(150, 40)  # Smaller button
         close_btn.setStyleSheet("""
             QPushButton {
                 background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
                     stop: 0 #0694a2, stop: 1 #0f766e);
                 color: white;
                 border: none;
-                border-radius: 8px;
+                border-radius: 6px;
                 font-family: 'Segoe UI', Arial, sans-serif;
-                font-size: 16px;
+                font-size: 14px;
                 font-weight: 600;
             }
             QPushButton:hover {
                 background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
-                    stop: 0 #0891b2, stop: 1 #134e4a);
+                    stop: 0 #4b5563, stop: 1 #0694a2);
             }
             QPushButton:pressed {
                 background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
-                    stop: 0 #0e7490, stop: 1 #042f2e);
+                    stop: 0 #0f766e, stop: 1 #111827);
             }
         """)
-        close_btn.clicked.connect(dialog.accept)
+        close_btn.clicked.connect(lambda: self.close_guide_with_guidance(dialog))
         
         footer_layout.addWidget(close_btn)
         main_layout.addWidget(footer_frame)
         
         # Show dialog
         dialog.exec()
+
+    def close_guide_with_guidance(self, dialog):
+        """Close the guide and show next steps guidance"""
+        dialog.accept()  # Close the camera setup guide first
+        
+        # Show guidance dialog
+        guidance_dialog = QDialog(self)
+        guidance_dialog.setWindowTitle("Next Steps")
+        guidance_dialog.setFixedSize(450, 300)
+        guidance_dialog.setModal(True)
+        
+        # Create layout
+        layout = QVBoxLayout(guidance_dialog)
+        layout.setSpacing(20)
+        layout.setContentsMargins(30, 30, 30, 30)
+        
+        # Icon and title
+        title_layout = QHBoxLayout()
+        
+        # Icon label
+        icon_label = QLabel("🎯")
+        icon_label.setStyleSheet("font-size: 32px;")
+        title_layout.addWidget(icon_label)
+        
+        # Title
+        title_label = QLabel("Ready to Set Up Your Cameras!")
+        title_label.setStyleSheet("""
+            font-family: 'Segoe UI', Arial, sans-serif;
+            font-size: 18px;
+            font-weight: 700;
+            color: #0694a2;
+            margin-left: 10px;
+        """)
+        title_layout.addWidget(title_label)
+        title_layout.addStretch()
+        
+        layout.addLayout(title_layout)
+        
+        # Guidance text
+        guidance_text = QLabel(
+            "Now you're ready for the next step:<br><br>"
+            "👉 <b>Click the \"🎥 Set Up Your Cameras\" button</b> below to start adding your cameras to Frigate.<br><br>"
+            "This will open the camera configuration tool where you can discover and configure your Amcrest cameras."
+        )
+        guidance_text.setTextFormat(Qt.RichText)  # Enable HTML rendering
+        guidance_text.setStyleSheet("""
+            font-family: 'Segoe UI', Arial, sans-serif;
+            font-size: 14px;
+            color: #2d3748;
+            line-height: 1.5;
+            padding: 15px;
+            background: #f7fafc;
+            border-radius: 8px;
+            border-left: 4px solid #0694a2;
+        """)
+        guidance_text.setWordWrap(True)
+        layout.addWidget(guidance_text)
+        
+        # Buttons
+        button_layout = QHBoxLayout()
+        
+        # Highlight button
+        highlight_btn = QPushButton("💡 Show Me the Button")
+        highlight_btn.setStyleSheet("""
+            QPushButton {
+                background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
+                    stop: 0 #0694a2, stop: 1 #0f766e);
+                color: white;
+                border: none;
+                border-radius: 6px;
+                font-family: 'Segoe UI', Arial, sans-serif;
+                font-size: 13px;
+                font-weight: 600;
+                padding: 8px 16px;
+            }
+            QPushButton:hover {
+                background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
+                    stop: 0 #0891b2, stop: 1 #164e63);
+            }
+        """)
+        highlight_btn.clicked.connect(lambda: self.highlight_setup_button(guidance_dialog))
+        
+        # Got it button
+        got_it_btn = QPushButton("Got It!")
+        got_it_btn.setStyleSheet("""
+            QPushButton {
+                background: #e2e8f0;
+                color: #2d3748;
+                border: 1px solid #cbd5e0;
+                border-radius: 6px;
+                font-family: 'Segoe UI', Arial, sans-serif;
+                font-size: 13px;
+                font-weight: 600;
+                padding: 8px 16px;
+            }
+            QPushButton:hover {
+                background: #cbd5e0;
+            }
+        """)
+        got_it_btn.clicked.connect(guidance_dialog.accept)
+        
+        button_layout.addWidget(highlight_btn)
+        button_layout.addStretch()
+        button_layout.addWidget(got_it_btn)
+        
+        layout.addLayout(button_layout)
+        
+        # Show guidance dialog
+        guidance_dialog.exec()
+
+    def highlight_setup_button(self, guidance_dialog):
+        """Highlight the setup cameras button and close guidance"""
+        guidance_dialog.accept()  # Close guidance dialog
+        
+        # Add temporary highlight animation to the setup button
+        if hasattr(self, 'setup_cameras_btn'):
+            # Store original stylesheet
+            original_style = self.setup_cameras_btn.styleSheet()
+            
+            # Apply highlight style
+            highlight_style = """
+                QPushButton {
+                    background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
+                        stop: 0 #c084fc, stop: 1 #a855f7);
+                    color: white;
+                    border: 3px solid #c084fc;
+                    border-radius: 8px;
+                    font-family: 'Segoe UI', Arial, sans-serif;
+                    font-size: 16px;
+                    font-weight: 700;
+                    text-align: center;
+                    padding: 8px;
+                }
+                QPushButton:hover {
+                    background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
+                        stop: 0 #ddd6fe, stop: 1 #8b5cf6);
+                }
+            """
+            
+            self.setup_cameras_btn.setStyleSheet(highlight_style)
+            
+            # Scroll to the button to make sure it's visible
+            if hasattr(self, 'scroll_area'):
+                self.setup_cameras_btn.ensurePolished()
+                # Force update
+                self.setup_cameras_btn.update()
+            
+            # Reset to original style after 5 seconds
+            QTimer.singleShot(5000, lambda: self.setup_cameras_btn.setStyleSheet(original_style))
 
     def launch_simple_gui(self):
         """Launch the monitoring GUI - this could open Frigate web UI or monitoring interface"""
@@ -4488,10 +5240,10 @@ cameras:
             }
             QPushButton:hover {
                 background: qlineargradient(x1:0, y1:0, x2:0, y2:1, 
-                    stop:0 #3b82f6, stop:1 #2563eb);
+                    stop:0 #0694a2, stop:1 #2563eb);
             }
             QPushButton:pressed {
-                background: #1e40af;
+                background: #0f766e;
             }
         """)
         self.install_docker_prereq_btn.setVisible(True)
@@ -5238,8 +5990,8 @@ cameras:
             QPushButton {
                 background: qlineargradient(x1:0, y1:0, x2:0, y2:1, 
                     stop:0 #bfdbfe, stop:1 #93c5fd);
-                color: #1e40af;
-                border: 1px solid #3b82f6;
+                color: #0f766e;
+                border: 1px solid #0694a2;
             }
             QPushButton:hover {
                 background: qlineargradient(x1:0, y1:0, x2:0, y2:1, 
@@ -5247,7 +5999,7 @@ cameras:
                 border: 1px solid #2563eb;
             }
             QPushButton:pressed {
-                background: #3b82f6;
+                background: #0694a2;
                 color: white;
             }
             QPushButton:disabled {
@@ -5717,7 +6469,7 @@ cameras:
         guide_description.setStyleSheet("""
             QLabel {
                 background: #e8f4fd;
-                color: #1e40af;
+                color: #0f766e;
                 padding: 12px 15px;
                 border-radius: 8px;
                 font-size: 13px;
@@ -5875,6 +6627,9 @@ cameras:
         self.preconfigured_open_ui_btn.setMinimumHeight(40)
         self.preconfigured_open_ui_btn.setToolTip("Open Frigate Web UI (enabled only when Frigate is running)")
         self.preconfigured_open_ui_btn.setEnabled(False)  # Disabled during initialization
+        
+        # Store the original style for proper restoration after highlighting
+        self._web_ui_btn_original_style = self.preconfigured_open_ui_btn.styleSheet()
         
         actions_layout.addWidget(self.preconfigured_open_ui_btn)
         left_layout.addWidget(actions_group)
@@ -6533,6 +7288,124 @@ cameras:
                         }
                     """)
 
+    def show_first_time_startup_info_if_needed(self):
+        """Show first-time startup info only if this is the first time starting Frigate"""
+        try:
+            # Check if we've shown this dialog before by looking for a flag file
+            first_start_flag = os.path.join(self.script_dir, '.frigate_first_start_shown')
+            
+            # Also check if Frigate container exists (if it exists, probably not first time)
+            container_exists = self._check_container_exists_sync()
+            
+            # Only show dialog if:
+            # 1. We haven't shown it before (.frigate_first_start_shown doesn't exist)
+            # 2. AND no Frigate container exists (truly first time)
+            if not os.path.exists(first_start_flag) and not container_exists:
+                self.show_first_time_startup_info()
+                # Create flag file to prevent showing again
+                try:
+                    with open(first_start_flag, 'w') as f:
+                        f.write("First start dialog shown")
+                except Exception as e:
+                    print(f"Could not create first start flag: {e}")
+                    
+        except Exception as e:
+            print(f"Error checking first-time startup status: {e}")
+            # On error, don't show the dialog to be safe
+
+    def _check_container_exists_sync(self):
+        """Synchronously check if Frigate container exists"""
+        try:
+            result = subprocess.run(['docker', 'ps', '-a', '--filter', 'name=frigate', '--format', '{{.Names}}'], 
+                                  capture_output=True, text=True, timeout=10)
+            return 'frigate' in result.stdout
+        except Exception:
+            return False
+
+    def show_first_time_startup_info(self):
+        """Show information dialog about first-time Frigate startup duration"""
+        info_dialog = QDialog(self)
+        info_dialog.setWindowTitle("Starting Frigate")
+        info_dialog.setFixedSize(480, 320)
+        info_dialog.setModal(True)
+        
+        # Create layout
+        layout = QVBoxLayout(info_dialog)
+        layout.setSpacing(20)
+        layout.setContentsMargins(30, 30, 30, 30)
+        
+        # Icon and title
+        title_layout = QHBoxLayout()
+        
+        # Icon label
+        icon_label = QLabel("🚀")
+        icon_label.setStyleSheet("font-size: 32px;")
+        title_layout.addWidget(icon_label)
+        
+        # Title
+        title_label = QLabel("Starting Frigate...")
+        title_label.setStyleSheet("""
+            font-family: 'Segoe UI', Arial, sans-serif;
+            font-size: 18px;
+            font-weight: 700;
+            color: #0694a2;
+            margin-left: 10px;
+        """)
+        title_layout.addWidget(title_label)
+        title_layout.addStretch()
+        
+        layout.addLayout(title_layout)
+        
+        # Info text
+        info_text = QLabel(
+            "⏰ <b>First-time startup may take 3-5 minutes</b><br><br>"
+            "You'll see <b>\"🔨 Building Image\"</b> in the button - this is normal and expected."
+        )
+        info_text.setTextFormat(Qt.RichText)
+        info_text.setStyleSheet("""
+            font-family: 'Segoe UI', Arial, sans-serif;
+            font-size: 14px;
+            color: #2d3748;
+            line-height: 1.5;
+            padding: 15px;
+            background: #f0f9ff;
+            border-radius: 8px;
+            border-left: 4px solid #0694a2;
+        """)
+        info_text.setWordWrap(True)
+        layout.addWidget(info_text)
+        
+        # Button
+        got_it_btn = QPushButton("Got It, Let's Start!")
+        got_it_btn.setStyleSheet("""
+            QPushButton {
+                background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
+                    stop: 0 #0694a2, stop: 1 #0f766e);
+                color: white;
+                border: none;
+                border-radius: 6px;
+                font-family: 'Segoe UI', Arial, sans-serif;
+                font-size: 14px;
+                font-weight: 600;
+                padding: 10px 20px;
+            }
+            QPushButton:hover {
+                background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
+                    stop: 0 #0891b2, stop: 1 #164e63);
+            }
+        """)
+        got_it_btn.clicked.connect(info_dialog.accept)
+        
+        button_layout = QHBoxLayout()
+        button_layout.addStretch()
+        button_layout.addWidget(got_it_btn)
+        button_layout.addStretch()
+        
+        layout.addLayout(button_layout)
+        
+        # Show dialog
+        info_dialog.exec()
+
     def get_operation_status_message(self, enabled, keep_stop_enabled=False):
         """Get a user-friendly message about button states"""
         if enabled:
@@ -6578,6 +7451,10 @@ cameras:
         
         # Store current action for completion message
         self.current_docker_action = action
+        
+        # Show first-time startup information dialog for start action (only on first time)
+        if action == 'start':
+            self.show_first_time_startup_info_if_needed()
         
         action_messages = {
             'start': "▶️ Initiating Frigate container start...",
