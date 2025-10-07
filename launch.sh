@@ -89,30 +89,6 @@ update_frigate_if_enabled() {
 check_and_update_control_panel
 update_frigate_if_enabled
 
-# System configuration for Frigate to scan cameras via ONVIF
-configure_system() {
-    echo "🔧 Configuring system for Frigate..."
-    
-    # Disable UFW firewall to prevent Docker networking issues
-    if command -v ufw &> /dev/null; then
-        echo "🔒 Disabling UFW firewall to prevent Docker networking conflicts..."
-        if sudo -n true 2>/dev/null; then
-            # Has passwordless sudo
-            sudo ufw disable 2>/dev/null && echo "✅ UFW disabled successfully" || echo "⚠️  Could not disable UFW automatically"
-        else
-            # Needs password for sudo
-            echo "🔐 Administrator privileges required to disable UFW firewall:"
-            sudo ufw disable && echo "✅ UFW disabled successfully" || echo "⚠️  Could not disable UFW"
-        fi
-    else
-        echo "ℹ️  UFW not installed, skipping firewall configuration"
-    fi
-    echo ""
-}
-
-# Configure system settings
-configure_system
-
 # Detect if running in GUI mode and setup logging
 if [ -z "$TERM" ] || [ "$TERM" = "dumb" ]; then
     # GUI mode - create a log file
