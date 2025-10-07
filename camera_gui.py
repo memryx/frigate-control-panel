@@ -80,6 +80,11 @@ class ONVIFDiscoveryWorker(QThread):
             # Check for interruption before starting
             if self.isInterruptionRequested():
                 return
+            
+            # Add network diagnostics
+            self.progress_update.emit("🌐 Checking network configuration...")
+            network_info = self.check_network_config()
+            self.progress_update.emit(f"📡 Network: {network_info}")
                 
             cameras = self.discover_onvif_cameras()
             
@@ -89,6 +94,7 @@ class ONVIFDiscoveryWorker(QThread):
                 
             if not cameras:
                 self.progress_update.emit("❌ No ONVIF cameras found on network")
+                self.progress_update.emit("💡 Troubleshooting: Check firewall, network connectivity, and camera ONVIF settings")
             else:
                 self.progress_update.emit(f"✅ Found {len(cameras)} camera(s)")
                 
@@ -98,6 +104,34 @@ class ONVIFDiscoveryWorker(QThread):
         
         if not self.isInterruptionRequested():
             self.discovery_finished.emit()
+    
+    def check_network_config(self):
+        """Check basic network configuration for camera discovery"""
+        try:
+            # Get local IP address
+            test_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            test_socket.connect(("8.8.8.8", 80))
+            local_ip = test_socket.getsockname()[0]
+            test_socket.close()
+            
+            # Check if multicast is available
+            try:
+                mcast_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                mcast_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                mcast_socket.settimeout(1.0)
+                mcast_socket.close()
+                multicast_ok = True
+            except:
+                multicast_ok = False
+            
+            network_status = f"{local_ip}"
+            if not multicast_ok:
+                network_status += " (multicast issues)"
+                
+            return network_status
+            
+        except Exception as e:
+            return f"Network issues: {str(e)}"
     
     def discover_onvif_cameras(self):
         """Discover ONVIF cameras using WS-Discovery"""
