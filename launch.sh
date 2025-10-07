@@ -377,42 +377,6 @@ if ! pip install PySide6 PyYAML; then
     fi
 fi
 
-# Check network configuration for camera discovery
-echo "🔍 Checking network configuration for camera discovery..."
-
-# Check if multicast is supported
-if command -v ip >/dev/null 2>&1; then
-    NETWORK_INTERFACE=$(ip route | grep default | awk '{print $5}' | head -n1)
-    if [ -n "$NETWORK_INTERFACE" ]; then
-        echo "📡 Primary network interface: $NETWORK_INTERFACE"
-        
-        # Check if interface supports multicast
-        if ip link show "$NETWORK_INTERFACE" | grep -q "MULTICAST"; then
-            echo "✅ Multicast supported on $NETWORK_INTERFACE"
-        else
-            echo "⚠️  Multicast may not be supported on $NETWORK_INTERFACE"
-            echo "   This could affect camera discovery functionality"
-        fi
-        
-        # Check local IP
-        LOCAL_IP=$(ip addr show "$NETWORK_INTERFACE" | grep "inet " | awk '{print $2}' | cut -d/ -f1 | head -n1)
-        if [ -n "$LOCAL_IP" ]; then
-            echo "🌐 Local IP address: $LOCAL_IP"
-            
-            # Provide network troubleshooting info
-            echo ""
-            echo "📋 Camera Discovery Troubleshooting:"
-            echo "   - Ensure cameras are on the same network as this computer ($LOCAL_IP/24)"
-            echo "   - Check if firewall allows multicast traffic (UDP port 3702)"
-            echo "   - Verify cameras support ONVIF WS-Discovery"
-            echo "   - Some routers block multicast traffic between subnets"
-        fi
-    fi
-else
-    echo "⚠️  Cannot detect network configuration (ip command not available)"
-fi
-
-echo ""
 echo "🎮 Launching Frigate Control Center..."
 
 python frigate_launcher.py
