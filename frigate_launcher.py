@@ -34,7 +34,7 @@ try:
         QDialog, QLineEdit, QDialogButtonBox, QFileDialog
     )
     from PySide6.QtCore import QThread, Signal, QTimer, Qt, QEvent
-    from PySide6.QtGui import QFont, QPixmap, QPalette, QColor, QIcon
+    from PySide6.QtGui import QFont, QPixmap, QPalette, QColor, QIcon, QPainter
 except ImportError as e:
     print("❌ Required GUI libraries are not available.")
     print("   Please run './launch.sh' to set up the environment properly.")
@@ -54,6 +54,38 @@ try:
 except ImportError as e:
     print(f"Warning: Could not import ConfigGUI: {e}")
     ConfigGUI = None
+
+class ModalOverlay(QWidget):
+    """Semi-transparent overlay widget to dim the background when dialogs are shown"""
+    
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setAttribute(Qt.WA_TransparentForMouseEvents, False)
+        self.setAttribute(Qt.WA_TranslucentBackground, True)
+        self.setStyleSheet("background: rgba(0, 0, 0, 0.4);")  # Semi-transparent black
+        
+        # Fill the entire parent widget
+        if parent:
+            self.setGeometry(parent.rect())
+            
+    def paintEvent(self, event):
+        """Custom paint event to create the overlay effect"""
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        
+        # Fill with semi-transparent black
+        painter.fillRect(self.rect(), QColor(0, 0, 0, 102))  # 40% opacity (102/255)
+        
+    def show_overlay(self):
+        """Show the overlay and bring it to front"""
+        if self.parent():
+            self.setGeometry(self.parent().rect())
+        self.show()
+        self.raise_()
+        
+    def hide_overlay(self):
+        """Hide the overlay"""
+        self.hide()
 
 class PasswordDialog(QDialog):
     """Secure password input dialog for sudo operations"""
@@ -175,7 +207,14 @@ class PasswordDialog(QDialog):
     def get_sudo_password(parent=None, operation_name="system operation"):
         """Static method to get sudo password from user"""
         dialog = PasswordDialog(parent, operation_name)
-        if dialog.exec() == QDialog.Accepted:
+        
+        # Use overlay if parent has the capability
+        if parent and hasattr(parent, 'show_dialog'):
+            result = parent.show_dialog(dialog)
+        else:
+            result = dialog.exec()
+            
+        if result == QDialog.Accepted:
             return dialog.get_password()
         return None
 
@@ -2012,10 +2051,14 @@ class FrigateLauncher(QMainWindow):
         self.button_animation_timer.timeout.connect(self.update_button_animation)
         self.button_animation_dots = 0
         self.button_base_text = ""
-        self.button_operation_state = "idle"  # idle, building, starting, running, stopping
+        self.button_operation_state = "idle"  # idle, starting, building, starting_container, running, stopping
         
         # Store references to container layouts for responsive resizing
         self.responsive_containers = []
+        
+        # Modal overlay for dimming background during dialogs
+        self.modal_overlay = ModalOverlay(self)
+        self.modal_overlay.hide()  # Initially hidden
         
         # Common scroll bar styling for consistency across all text areas
         self.scroll_bar_style = """
@@ -2107,7 +2150,7 @@ class FrigateLauncher(QMainWindow):
     def _show_welcome_dialog(self):
         """Internal method to show the welcome dialog"""
         dialog = CameraSetupWelcomeDialog(self)
-        result = dialog.exec()
+        result = self.show_dialog(dialog)
         
         if result == QDialog.Accepted:
             # User clicked "Start Camera Setup"
@@ -2115,11 +2158,76 @@ class FrigateLauncher(QMainWindow):
                 self.show_camera_setup_guide()
             elif dialog.setup_complete_requested:
                 self.mark_setup_complete()
-                QMessageBox.information(
-                    self, 'Setup Complete',
+                self.show_message_box(
+                    QMessageBox.Information, 'Setup Complete',
                     'Great! Your system is ready to go.\n\n'
                     'You can always access the camera setup guide from the PreConfigured Box tab.'
                 )
+    
+    def show_modal_overlay(self):
+        """Show the modal overlay to dim the background"""
+        if hasattr(self, 'modal_overlay'):
+            self.modal_overlay.show_overlay()
+    
+    def hide_modal_overlay(self):
+        """Hide the modal overlay"""
+        if hasattr(self, 'modal_overlay'):
+            self.modal_overlay.hide_overlay()
+    
+    def show_message_box(self, icon, title, text, buttons=None, default_button=None):
+        """Show a QMessageBox with modal overlay"""
+        self.show_modal_overlay()
+        
+        try:
+            if buttons is None:
+                buttons = QMessageBox.Ok
+            if default_button is None:
+                default_button = QMessageBox.Ok
+                
+            msg_box = QMessageBox(icon, title, text, buttons, self)
+            msg_box.setDefaultButton(default_button)
+            result = msg_box.exec()
+            return result
+        finally:
+            self.hide_modal_overlay()
+    
+    def show_dialog(self, dialog):
+        """Show a QDialog with modal overlay"""
+        self.show_modal_overlay()
+        
+        try:
+            result = dialog.exec()
+            return result
+        finally:
+            self.hide_modal_overlay()
+    
+    def show_external_gui(self, gui_instance):
+        """Show an external GUI window with modal overlay"""
+        self.show_modal_overlay()
+        
+        # Store original close event if it exists
+        if hasattr(gui_instance, 'closeEvent'):
+            original_close = gui_instance.closeEvent
+        else:
+            original_close = None
+        
+        # Create enhanced close event handler
+        def enhanced_close(event):
+            self.hide_modal_overlay()
+            if original_close:
+                original_close(event)
+            else:
+                event.accept()
+        
+        # Override the closeEvent
+        gui_instance.closeEvent = enhanced_close
+        
+        # Also handle if the GUI emits a finished signal
+        if hasattr(gui_instance, 'finished'):
+            gui_instance.finished.connect(self.hide_modal_overlay)
+        
+        # Show the GUI
+        gui_instance.show()
     
     def setup_ui(self):
         self.setWindowTitle("MemryX + Frigate Launcher - Full Control Center")
@@ -3351,7 +3459,7 @@ class FrigateLauncher(QMainWindow):
             # Update button states using enhanced state management
             if hasattr(self, 'preconfigured_start_btn') and hasattr(self, 'preconfigured_stop_btn'):
                 # Skip if currently in an operation state (building, starting, stopping)
-                if hasattr(self, 'button_operation_state') and self.button_operation_state in ["building", "starting", "stopping"]:
+                if hasattr(self, 'button_operation_state') and self.button_operation_state in ["building", "starting", "starting_container", "stopping"]:
                     return
                     
                 if container_running:
@@ -3468,7 +3576,7 @@ class FrigateLauncher(QMainWindow):
                         self.preconfigured_start_btn.setToolTip("System setup required before starting Frigate")
                     else:
                         # Only enable if no warnings and not in a disabled state
-                        if hasattr(self, 'button_operation_state') and self.button_operation_state not in ['building', 'starting', 'stopping']:
+                        if hasattr(self, 'button_operation_state') and self.button_operation_state not in ['building', 'starting', 'starting_container', 'stopping']:
                             self.preconfigured_start_btn.setEnabled(True)
                             self.preconfigured_start_btn.setToolTip("Start Frigate container")
                 
@@ -3496,16 +3604,15 @@ class FrigateLauncher(QMainWindow):
         """Open the simple camera GUI"""
         # Check if application is still initializing
         if self.is_initializing:
-            QMessageBox.information(
-                self, "Please Wait", 
-                "The application is still initializing. Please wait for the initialization to complete.",
-                QMessageBox.Ok
+            self.show_message_box(
+                QMessageBox.Information, "Please Wait", 
+                "The application is still initializing. Please wait for the initialization to complete."
             )
             return
             
         if SimpleCameraGUI is None:
-            QMessageBox.critical(
-                self, 'Simple Camera GUI Unavailable',
+            self.show_message_box(
+                QMessageBox.Critical, 'Simple Camera GUI Unavailable',
                 'The Simple Camera GUI could not be loaded.\n'
                 'Please ensure simple_camera_gui.py is available in the same directory.'
             )
@@ -3534,10 +3641,11 @@ class FrigateLauncher(QMainWindow):
             # Replace the save_config method with our enhanced version
             self.camera_gui.save_config = enhanced_save_config
             
-            self.camera_gui.show()
+            # Show with overlay
+            self.show_external_gui(self.camera_gui)
         except Exception as e:
-            QMessageBox.critical(
-                self, 'Error Opening Camera GUI',
+            self.show_message_box(
+                QMessageBox.Critical, 'Error Opening Camera GUI',
                 f'Could not open the Simple Camera GUI:\n{str(e)}'
             )
 
@@ -3655,8 +3763,8 @@ class FrigateLauncher(QMainWindow):
         
         layout.addLayout(button_layout)
         
-        # Show guidance dialog
-        guidance_dialog.exec()
+        # Show guidance dialog with modal overlay
+        self.show_dialog(guidance_dialog)
 
     def highlight_start_frigate_button(self, guidance_dialog):
         """Highlight the Start Frigate button"""
@@ -3799,8 +3907,8 @@ class FrigateLauncher(QMainWindow):
         
         layout.addLayout(button_layout)
         
-        # Show guidance dialog
-        guidance_dialog.exec()
+        # Show guidance dialog with modal overlay
+        self.show_dialog(guidance_dialog)
 
     def highlight_web_ui_button(self, guidance_dialog):
         """Highlight the Open Frigate Web UI button"""
@@ -4440,8 +4548,8 @@ class FrigateLauncher(QMainWindow):
         footer_layout.addWidget(close_btn)
         main_layout.addWidget(footer_frame)
         
-        # Show dialog
-        dialog.exec()
+        # Show dialog with modal overlay
+        self.show_dialog(dialog)
 
     def close_guide_with_guidance(self, dialog):
         """Close the guide and show next steps guidance"""
@@ -4549,8 +4657,8 @@ class FrigateLauncher(QMainWindow):
         
         layout.addLayout(button_layout)
         
-        # Show guidance dialog
-        guidance_dialog.exec()
+        # Show guidance dialog with modal overlay
+        self.show_dialog(guidance_dialog)
 
     def highlight_setup_button(self, guidance_dialog):
         """Highlight the setup cameras button and close guidance"""
@@ -6585,7 +6693,7 @@ cameras:
         self.preconfigured_start_btn.setEnabled(False)  # Disabled during initialization
         
         # Stop Frigate button (35% width) 
-        self.preconfigured_stop_btn = QPushButton("⏹️ Stop + Remove")
+        self.preconfigured_stop_btn = QPushButton("⏹️ Stop")
         self.preconfigured_stop_btn.clicked.connect(lambda: self.docker_action('remove'))
         self.preconfigured_stop_btn.setMinimumHeight(45)
         self.preconfigured_stop_btn.setToolTip("Stop and remove Frigate container completely")
@@ -7403,8 +7511,8 @@ cameras:
         
         layout.addLayout(button_layout)
         
-        # Show dialog
-        info_dialog.exec()
+        # Show dialog with modal overlay
+        self.show_dialog(info_dialog)
 
     def get_operation_status_message(self, enabled, keep_stop_enabled=False):
         """Get a user-friendly message about button states"""
@@ -7491,8 +7599,8 @@ cameras:
                 'remove': 'stop and remove the Frigate container'
             }
             
-            reply = QMessageBox.question(
-                self, "Confirm Action", 
+            reply = self.show_message_box(
+                QMessageBox.Question, "Confirm Action", 
                 f"Are you sure you want to {action_names[action]}?\n\n"
                 f"This action cannot be undone.",
                 QMessageBox.Yes | QMessageBox.No,
@@ -7514,9 +7622,9 @@ cameras:
         self.docker_worker.progress.connect(self.on_docker_progress_for_button)  # Connect button updates
         self.docker_worker.finished.connect(self.on_docker_finished)
         
-        # Update button state based on action
+        # Update button state based on action - simplified to 3 states only
         if action == 'start' or action == 'rebuild':
-            self.update_preconfigured_button_state("building")
+            self.update_preconfigured_button_state("starting")  # Start with "Starting Frigate"
         elif action == 'remove':
             # For remove action (stop+remove), show stopping state
             self.update_preconfigured_button_state("stopping")
@@ -7538,7 +7646,7 @@ cameras:
             
             # Reset stop button to default state
             if hasattr(self, 'preconfigured_stop_btn'):
-                self.preconfigured_stop_btn.setText("⏹️ Stop + Remove")
+                self.preconfigured_stop_btn.setText("⏹️ Stop")
                 self.preconfigured_stop_btn.setStyleSheet("""
                     QPushButton {
                         background: qlineargradient(x1:0, y1:0, x2:0, y2:1, 
@@ -7585,7 +7693,7 @@ cameras:
             self.button_animation_timer.start(500)  # Update every 500ms
             
         elif state == "starting":
-            self.button_base_text = "🚀 Starting Container"
+            self.button_base_text = "🚀 Starting Frigate"
             self.button_animation_dots = 0
             self.preconfigured_start_btn.setEnabled(False)
             self.preconfigured_start_btn.setStyleSheet("""
@@ -7603,14 +7711,33 @@ cameras:
             """)
             self.button_animation_timer.start(500)
             
+        elif state == "starting_container":
+            self.button_base_text = "🚀 Starting Container"
+            self.button_animation_dots = 0
+            self.preconfigured_start_btn.setEnabled(False)
+            self.preconfigured_start_btn.setStyleSheet("""
+                QPushButton {
+                    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, 
+                        stop:0 #4caf50, stop:1 #388e3c);
+                    color: white;
+                    border: none;
+                    border-radius: 8px;
+                    padding: 14px 16px;
+                    font-weight: 600;
+                    font-size: 14px;
+                    font-family: 'Segoe UI', 'Inter', sans-serif;
+                }
+            """)
+            self.button_animation_timer.start(500)
+            
         elif state == "stopping":
-            self.button_base_text = "🛑 Stopping + Removing"
+            self.button_base_text = "🛑 Stopping"
             self.button_animation_dots = 0
             self.preconfigured_start_btn.setEnabled(False)
             
             # Update stop button state during stopping
             if hasattr(self, 'preconfigured_stop_btn'):
-                self.stop_button_base_text = "🛑 Stopping + Removing"
+                self.stop_button_base_text = "🛑 Stopping"
                 self.preconfigured_stop_btn.setEnabled(False)
                 self.preconfigured_stop_btn.setStyleSheet("""
                     QPushButton {
@@ -7647,7 +7774,7 @@ cameras:
             
             # Enable stop button when running
             if hasattr(self, 'preconfigured_stop_btn'):
-                self.preconfigured_stop_btn.setText("⏹️ Stop + Remove")
+                self.preconfigured_stop_btn.setText("⏹️ Stop")
                 self.preconfigured_stop_btn.setEnabled(True)
                 
         elif state == "stopped":
@@ -7658,7 +7785,7 @@ cameras:
             
             # Update stop button to stopped state
             if hasattr(self, 'preconfigured_stop_btn'):
-                self.preconfigured_stop_btn.setText("✅ Stopped & Removed")
+                self.preconfigured_stop_btn.setText("✅ Stopped")
                 self.preconfigured_stop_btn.setStyleSheet("""
                     QPushButton {
                         background: qlineargradient(x1:0, y1:0, x2:0, y2:1, 
@@ -7673,24 +7800,6 @@ cameras:
                     }
                 """)
                 self.preconfigured_stop_btn.setEnabled(False)
-            
-        elif state == "error":
-            self.button_animation_timer.stop()
-            self.preconfigured_start_btn.setText("❌ Error - Click to Retry")
-            self.preconfigured_start_btn.setStyleSheet("""
-                QPushButton {
-                    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, 
-                        stop:0 #f44336, stop:1 #d32f2f);
-                    color: white;
-                    border: none;
-                    border-radius: 8px;
-                    padding: 14px 16px;
-                    font-weight: 600;
-                    font-size: 14px;
-                    font-family: 'Segoe UI', 'Inter', sans-serif;
-                }
-            """)
-            self.preconfigured_start_btn.setEnabled(True)
 
     def update_button_animation(self):
         """Update button text with animated dots"""
@@ -7717,21 +7826,25 @@ cameras:
             self.preconfigured_stop_btn.setText(stop_animated_text)
 
     def on_docker_progress_for_button(self, text):
-        """Handle docker progress updates for button state enhancement"""
+        """Handle docker progress updates for button state enhancement - simplified to only show 3 states"""
         if not hasattr(self, 'preconfigured_start_btn'):
             return
             
-        # Map progress messages to button states
+        # Only map specific progress messages to button states - ignore errors and warnings
         text_lower = text.lower()
         
-        if "building" in text_lower or "build" in text_lower:
-            self.update_preconfigured_button_state("building")
-        elif "starting" in text_lower or "creating" in text_lower:
-            self.update_preconfigured_button_state("starting")
+        # Progression: Starting Frigate -> Building Image -> Starting Container -> Running
+        if ("building" in text_lower or "build" in text_lower) and "building image" not in text_lower:
+            # Only switch to building if not already in that state
+            if hasattr(self, 'button_operation_state') and self.button_operation_state != "building":
+                self.update_preconfigured_button_state("building")
+        elif ("starting" in text_lower or "creating" in text_lower) and "starting container" not in text_lower:
+            # Only switch to starting container if currently building
+            if hasattr(self, 'button_operation_state') and self.button_operation_state in ["starting", "building", "starting_container"]:
+                self.update_preconfigured_button_state("starting_container")
         elif "started successfully" in text_lower or "frigate is now running" in text_lower:
             self.update_preconfigured_button_state("running")
-        elif "error" in text_lower or "failed" in text_lower:
-            self.update_preconfigured_button_state("error")
+        # Removed error state handling - keep current state even if errors/warnings occur
 
     
     def _append_docker_progress(self, text):
@@ -7752,14 +7865,15 @@ cameras:
             print(f"Docker Progress: {formatted_text}")
     
     def on_docker_finished(self, success):
-        # Update button state based on completion
+        # Update button state based on completion - no error state, just reset to idle
         if hasattr(self, 'current_docker_action'):
             action = self.current_docker_action
             if action == 'start':
                 if success:
                     self.update_preconfigured_button_state("running")
                 else:
-                    self.update_preconfigured_button_state("error")
+                    # Even on failure, just reset to idle instead of showing error
+                    self.update_preconfigured_button_state("idle")
             else:
                 # For other actions, reset to idle state
                 self.update_preconfigured_button_state("idle")
@@ -7774,23 +7888,23 @@ cameras:
                 if self.current_docker_action == 'start':
                     if hasattr(self, 'docker_progress'):
                         self.docker_progress.append("🎉 Frigate Docker container started successfully!")
-                    QMessageBox.information(self, "Success", "Frigate Docker container started successfully!\n\nOpen Frigate Web UI to monitor.")
+                    self.show_message_box(QMessageBox.Information, "Success", "Frigate Docker container started successfully!\n\nOpen Frigate Web UI to monitor.")
                 elif self.current_docker_action == 'stop':
                     if hasattr(self, 'docker_progress'):
                         self.docker_progress.append("🎉 Frigate Docker container stopped successfully!")
-                    QMessageBox.information(self, "Success", "Frigate Docker container stopped successfully!")
+                    self.show_message_box(QMessageBox.Information, "Success", "Frigate Docker container stopped successfully!")
                 elif self.current_docker_action == 'restart':
                     if hasattr(self, 'docker_progress'):
                         self.docker_progress.append("🎉 Frigate Docker container restarted successfully!")
-                    QMessageBox.information(self, "Success", "Frigate Docker container restarted successfully!\n\nOpen Frigate Web UI to monitor.")
+                    self.show_message_box(QMessageBox.Information, "Success", "Frigate Docker container restarted successfully!\n\nOpen Frigate Web UI to monitor.")
                 elif self.current_docker_action == 'rebuild':
                     if hasattr(self, 'docker_progress'):
                         self.docker_progress.append("🎉 Frigate Docker container rebuilt successfully!")
-                    QMessageBox.information(self, "Success", "Frigate Docker container rebuilt successfully!")
+                    self.show_message_box(QMessageBox.Information, "Success", "Frigate Docker container rebuilt successfully!")
                 elif self.current_docker_action == 'remove':
                     if hasattr(self, 'docker_progress'):
                         self.docker_progress.append("🎉 Frigate Docker container stopped and removed successfully!")
-                    QMessageBox.information(self, "Success", "Frigate Docker container stopped and removed successfully!")
+                    self.show_message_box(QMessageBox.Information, "Success", "Frigate Docker container stopped and removed successfully!")
                     # Set stopped state for buttons
                     if hasattr(self, 'preconfigured_start_btn'):
                         QTimer.singleShot(500, lambda: self.update_preconfigured_button_state("stopped"))
@@ -7798,16 +7912,16 @@ cameras:
                     # Fallback for unknown operations
                     if hasattr(self, 'docker_progress'):
                         self.docker_progress.append("🎉 Docker operation completed successfully!")
-                    QMessageBox.information(self, "Success", "Docker operation completed successfully!")
+                    self.show_message_box(QMessageBox.Information, "Success", "Docker operation completed successfully!")
             else:
                 # Fallback if no action stored
                 if hasattr(self, 'docker_progress'):
                     self.docker_progress.append("🎉 Docker operation completed successfully!")
-                QMessageBox.information(self, "Success", "Docker operation completed successfully!")
+                self.show_message_box(QMessageBox.Information, "Success", "Docker operation completed successfully!")
         else:
             if hasattr(self, 'docker_progress'):
                 self.docker_progress.append("❌ Docker operation failed. Check the logs above for details.")
-            QMessageBox.warning(self, "Error", "Docker operation failed. Please check the logs.")
+            self.show_message_box(QMessageBox.Warning, "Error", "Docker operation failed. Please check the logs.")
         
         # RE-ENABLE ALL BUTTONS AFTER OPERATION COMPLETES
         self.set_docker_buttons_enabled(True)
@@ -7837,6 +7951,10 @@ cameras:
     def resizeEvent(self, event):
         """Handle window resize events to update responsive layouts"""
         super().resizeEvent(event)
+        
+        # Update modal overlay size to match new window size
+        if hasattr(self, 'modal_overlay'):
+            self.modal_overlay.setGeometry(self.rect())
         
         # Only update layouts if not in initialization phase
         if not getattr(self, 'is_initializing', True):
@@ -7913,16 +8031,15 @@ cameras:
         """Open the advanced configuration GUI"""
         # Check if application is still initializing
         if self.is_initializing:
-            QMessageBox.information(
-                self, "Please Wait", 
-                "The application is still initializing. Please wait for the initialization to complete.",
-                QMessageBox.Ok
+            self.show_message_box(
+                QMessageBox.Information, "Please Wait", 
+                "The application is still initializing. Please wait for the initialization to complete."
             )
             return
             
         if ConfigGUI is None:
-            QMessageBox.critical(
-                self, 'Advanced Config GUI Unavailable',
+            self.show_message_box(
+                QMessageBox.Critical, 'Advanced Config GUI Unavailable',
                 'The Advanced Configuration GUI could not be loaded.\n'
                 'Please ensure advanced_config_gui.py is available in the same directory.'
             )
@@ -7933,10 +8050,11 @@ cameras:
             self.config_gui = ConfigGUI()
             # Pass reference to this launcher so config GUI can suppress popups if needed
             self.config_gui.launcher_parent = self
-            self.config_gui.show()
+            # Show with overlay
+            self.show_external_gui(self.config_gui)
         except Exception as e:
-            QMessageBox.critical(
-                self, 'Error Opening Config GUI',
+            self.show_message_box(
+                QMessageBox.Critical, 'Error Opening Config GUI',
                 f'Could not open the Advanced Configuration GUI:\n{str(e)}'
             )
     
