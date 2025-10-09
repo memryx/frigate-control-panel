@@ -1348,8 +1348,8 @@ class ConfigGUI(QWidget):
             
             # Extract detect settings
             detect_config = camera_config.get("detect", {})
-            detect_width = detect_config.get("width", 1280)
-            detect_height = detect_config.get("height", 720)
+            detect_width = detect_config.get("width", 2560)
+            detect_height = detect_config.get("height", 1440)
             detect_fps = detect_config.get("fps", 5)
             detect_enabled = detect_config.get("enabled", True)
             
@@ -2549,8 +2549,8 @@ class ConfigGUI(QWidget):
                         cameras_config[camera_name] = {
                             "ffmpeg": {"inputs": [{"path": camera_url, "roles": roles}]},
                             "detect": {
-                                "width": cam["detect_width"].value() if cam.get("detect_width") else 1280,
-                                "height": cam["detect_height"].value() if cam.get("detect_height") else 720,
+                                "width": cam["detect_width"].value() if cam.get("detect_width") else 2560,
+                                "height": cam["detect_height"].value() if cam.get("detect_height") else 1440,
                                 "fps": cam["detect_fps"].value() if cam.get("detect_fps") else 5,
                                 "enabled": cam["detect_enabled"].isChecked() if cam.get("detect_enabled") else True,
                             },
@@ -2665,8 +2665,8 @@ class ConfigGUI(QWidget):
                 - detect
                 - record
         detect:
-        width: 1920
-        height: 1080
+        width: 2560
+        height: 1440
         fps: 5
         enabled: true
 

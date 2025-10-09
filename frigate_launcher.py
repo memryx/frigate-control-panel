@@ -628,8 +628,8 @@ labelmap_path: /labelmap/coco-80.txt
 #         roles:
 #           - detect
 #   detect:
-#     width: 1280
-#     height: 720
+#     width: 2560
+#     height: 1440
 
 cameras:
 cam1:
@@ -640,8 +640,8 @@ cam1:
         roles:
             - detect
     detect:
-    width: 1920
-    height: 1080
+    width: 2560
+    height: 1440
     fps: 5
     enabled: true
 
@@ -3077,8 +3077,8 @@ class FrigateLauncher(QMainWindow):
 #             - detect
 #             - record
 #     detect:
-#       width: 1920
-#       height: 1080
+#       width: 2560
+#       height: 1440
 #       fps: 5
 
 # objects:
@@ -4926,8 +4926,8 @@ cameras:
             - detect
             - record
     detect:
-      width: 1920
-      height: 1080
+      width: 2560
+      height: 1440
       fps: 5
     objects:
       track:
@@ -8261,8 +8261,8 @@ model:
 #         roles:
 #           - detect
 #   detect:
-#     width: 1280
-#     height: 720
+#     width: 2560
+#     height: 1440
 
 cameras:
   cam1:
@@ -8273,8 +8273,8 @@ cameras:
           roles:
             - detect
     detect:
-      width: 1920
-      height: 1080
+      width: 2560
+      height: 1440
       fps: 5
       enabled: true
 
