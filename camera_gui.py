@@ -466,9 +466,6 @@ class ONVIFDiscoveryDialog(QDialog):
         self.setModal(True)
         self.resize(700, 500)
         
-        # Center the dialog on screen
-        self.center_on_screen()
-        
         self.discovered_cameras = []
         self.worker = None
         
@@ -586,24 +583,6 @@ class ONVIFDiscoveryDialog(QDialog):
         
         # Connect table selection
         self.camera_table.selectionModel().selectionChanged.connect(self.on_selection_changed)
-    
-    def center_on_screen(self):
-        """Center the dialog on the screen using Qt's built-in geometry methods"""
-        # Get the screen geometry
-        screen = QApplication.primaryScreen()
-        screen_geometry = screen.availableGeometry()
-        
-        # Get the dialog geometry
-        dialog_geometry = self.frameGeometry()
-        
-        # Calculate center point
-        center_point = screen_geometry.center()
-        
-        # Move the dialog's center to the screen's center
-        dialog_geometry.moveCenter(center_point)
-        
-        # Move the dialog to the calculated position
-        self.move(dialog_geometry.topLeft())
     
     def start_discovery(self):
         """Start ONVIF camera discovery"""
@@ -773,27 +752,6 @@ class CocoClassesDialog(QDialog):
         
         layout.addLayout(btn_layout)
         self.setLayout(layout)
-        
-        # Center the dialog on screen
-        self.center_on_screen()
-    
-    def center_on_screen(self):
-        """Center the dialog on the screen using Qt's built-in geometry methods"""
-        # Get the screen geometry
-        screen = QApplication.primaryScreen()
-        screen_geometry = screen.availableGeometry()
-        
-        # Get the dialog geometry
-        dialog_geometry = self.frameGeometry()
-        
-        # Calculate center point
-        center_point = screen_geometry.center()
-        
-        # Move the dialog's center to the screen's center
-        dialog_geometry.moveCenter(center_point)
-        
-        # Move the dialog to the calculated position
-        self.move(dialog_geometry.topLeft())
 
 
 
@@ -819,8 +777,11 @@ class SimpleCameraGUI(QWidget):
         self.resize(win_width, win_height)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
 
-        # Center the window using Qt's built-in method for better reliability
-        self.center_on_screen()
+        # Center the window
+        self.move(
+            (screen_width - win_width) // 2,
+            (screen_height - win_height) // 2
+        )
 
         # Global Layout with responsive setup
         layout = QVBoxLayout(self)
@@ -1139,24 +1100,6 @@ class SimpleCameraGUI(QWidget):
         btn_layout.addWidget(save_btn)
         
         layout.addLayout(btn_layout)
-
-    def center_on_screen(self):
-        """Center the window on the screen using Qt's built-in geometry methods"""
-        # Get the screen geometry
-        screen = QApplication.primaryScreen()
-        screen_geometry = screen.availableGeometry()
-        
-        # Get the window geometry
-        window_geometry = self.frameGeometry()
-        
-        # Calculate center point
-        center_point = screen_geometry.center()
-        
-        # Move the window's center to the screen's center
-        window_geometry.moveCenter(center_point)
-        
-        # Move the window to the calculated position
-        self.move(window_geometry.topLeft())
 
     # ================================
     # INPUT VALIDATION METHODS
