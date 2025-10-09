@@ -155,6 +155,27 @@ class AdvancedSettingsDialog(QDialog):
         
         self.setLayout(layout)
         self.resize(600, 250)  # Set a larger size
+        
+        # Center the dialog on screen
+        self.center_on_screen()
+    
+    def center_on_screen(self):
+        """Center the dialog on the screen using Qt's built-in geometry methods"""
+        # Get the screen geometry
+        screen = QApplication.primaryScreen()
+        screen_geometry = screen.availableGeometry()
+        
+        # Get the dialog geometry
+        dialog_geometry = self.frameGeometry()
+        
+        # Calculate center point
+        center_point = screen_geometry.center()
+        
+        # Move the dialog's center to the screen's center
+        dialog_geometry.moveCenter(center_point)
+        
+        # Move the dialog to the calculated position
+        self.move(dialog_geometry.topLeft())
 
 class CocoClassesDialog(QDialog):
     def __init__(self, parent=None):
@@ -192,6 +213,27 @@ class CocoClassesDialog(QDialog):
         
         layout.addLayout(btn_layout)
         self.setLayout(layout)
+        
+        # Center the dialog on screen
+        self.center_on_screen()
+    
+    def center_on_screen(self):
+        """Center the dialog on the screen using Qt's built-in geometry methods"""
+        # Get the screen geometry
+        screen = QApplication.primaryScreen()
+        screen_geometry = screen.availableGeometry()
+        
+        # Get the dialog geometry
+        dialog_geometry = self.frameGeometry()
+        
+        # Calculate center point
+        center_point = screen_geometry.center()
+        
+        # Move the dialog's center to the screen's center
+        dialog_geometry.moveCenter(center_point)
+        
+        # Move the dialog to the calculated position
+        self.move(dialog_geometry.topLeft())
 
 class CameraSetupDialog(QDialog):
     def __init__(self, parent=None):
@@ -603,6 +645,27 @@ class CameraSetupDialog(QDialog):
         layout.addWidget(footer_widget)
         
         self.setLayout(layout)
+        
+        # Center the dialog on screen
+        self.center_on_screen()
+    
+    def center_on_screen(self):
+        """Center the dialog on the screen using Qt's built-in geometry methods"""
+        # Get the screen geometry
+        screen = QApplication.primaryScreen()
+        screen_geometry = screen.availableGeometry()
+        
+        # Get the dialog geometry
+        dialog_geometry = self.frameGeometry()
+        
+        # Calculate center point
+        center_point = screen_geometry.center()
+        
+        # Move the dialog's center to the screen's center
+        dialog_geometry.moveCenter(center_point)
+        
+        # Move the dialog to the calculated position
+        self.move(dialog_geometry.topLeft())
 
 class ConfigGUI(QWidget):
     def __init__(self):
@@ -620,11 +683,8 @@ class ConfigGUI(QWidget):
         win_height = int(screen_height * 0.8)
         self.resize(win_width, win_height)
 
-        # Center the window
-        self.move(
-            (screen_width - win_width) // 2,
-            (screen_height - win_height) // 2
-        )
+        # Center the window using Qt's built-in method for better reliability
+        self.center_on_screen()
 
         self.config_saved = False   # track if user pressed save
         self.advanced_settings_exit = False  # New flag to track exit via Advanced Settings
@@ -1186,6 +1246,24 @@ class ConfigGUI(QWidget):
         # Load existing configuration for other settings (non-camera)
         self.load_existing_config()
 
+    def center_on_screen(self):
+        """Center the window on the screen using Qt's built-in geometry methods"""
+        # Get the screen geometry
+        screen = QApplication.primaryScreen()
+        screen_geometry = screen.availableGeometry()
+        
+        # Get the window geometry
+        window_geometry = self.frameGeometry()
+        
+        # Calculate center point
+        center_point = screen_geometry.center()
+        
+        # Move the window's center to the screen's center
+        window_geometry.moveCenter(center_point)
+        
+        # Move the window to the calculated position
+        self.move(window_geometry.topLeft())
+
     # -------- helpers for resolution & modes --------
     def _parse_resolution(self, text: str):
         # expects like "320 x 320"
@@ -1420,6 +1498,17 @@ class ConfigGUI(QWidget):
             objects_field.setMaximumHeight(80)
             objects_field.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
             
+            # Create objects row with help link
+            objects_row = QHBoxLayout()
+            objects_row.addWidget(objects_field)
+            help_link = QLabel('&nbsp;<a href="#" style="color: #2c6b7d; font-weight: bold; text-decoration: none;">📋 View COCO Classes</a>')
+            help_link.setTextFormat(Qt.RichText)
+            help_link.setTextInteractionFlags(Qt.LinksAccessibleByMouse)
+            help_link.linkActivated.connect(lambda: CocoClassesDialog(self).exec())
+            objects_row.addWidget(help_link)
+            objects_container = QWidget()
+            objects_container.setLayout(objects_row)
+            
             # Snapshots
             snapshots_enabled_field = QCheckBox("Enable Snapshots")
             snapshots_enabled_field.setChecked(snapshots_enabled)
@@ -1469,7 +1558,7 @@ class ConfigGUI(QWidget):
             detect_layout.addRow("", detect_enabled_field)
             form.addRow(detect_group)
             
-            form.addRow("Objects to Track:", objects_field)
+            form.addRow("Objects to Track:", objects_container)
             
             # Snapshots
             snapshots_group = QGroupBox("Snapshots")
