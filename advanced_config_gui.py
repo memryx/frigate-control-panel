@@ -34,7 +34,8 @@ try:
         ONVIFDiscoveryDialog,  # This is the correct class name
         SimpleCameraGUI,
         cleanup_all_threads,
-        _active_onvif_workers
+        _active_onvif_workers,
+        CenteringMixin  # Import the centering mixin
     )
     ONVIF_AVAILABLE = True
 except ImportError as e:
@@ -89,7 +90,7 @@ class MyDumper(yaml.Dumper):
         
         return '\n'.join(result_lines)
 
-class AdvancedSettingsDialog(QDialog):
+class AdvancedSettingsDialog(QDialog, CenteringMixin):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Advanced Settings")
@@ -155,8 +156,11 @@ class AdvancedSettingsDialog(QDialog):
         
         self.setLayout(layout)
         self.resize(600, 250)  # Set a larger size
+        
+        # Center the dialog
+        self.center_on_screen()
 
-class CocoClassesDialog(QDialog):
+class CocoClassesDialog(QDialog, CenteringMixin):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("COCO Classes")
@@ -192,8 +196,11 @@ class CocoClassesDialog(QDialog):
         
         layout.addLayout(btn_layout)
         self.setLayout(layout)
+        
+        # Center the dialog
+        self.center_on_screen()
 
-class CameraSetupDialog(QDialog):
+class CameraSetupDialog(QDialog, CenteringMixin):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("📖 Camera Setup Guide - Frigate + MemryX")
@@ -603,8 +610,11 @@ class CameraSetupDialog(QDialog):
         layout.addWidget(footer_widget)
         
         self.setLayout(layout)
+        
+        # Center the dialog
+        self.center_on_screen()
 
-class ConfigGUI(QWidget):
+class ConfigGUI(QWidget, CenteringMixin):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Frigate + MemryX Config Generator")
@@ -620,11 +630,8 @@ class ConfigGUI(QWidget):
         win_height = int(screen_height * 0.8)
         self.resize(win_width, win_height)
 
-        # Center the window
-        self.move(
-            (screen_width - win_width) // 2,
-            (screen_height - win_height) // 2
-        )
+        # Center the window using robust centering
+        self.center_on_screen()
 
         self.config_saved = False   # track if user pressed save
         self.advanced_settings_exit = False  # New flag to track exit via Advanced Settings
@@ -1469,7 +1476,17 @@ class ConfigGUI(QWidget):
             detect_layout.addRow("", detect_enabled_field)
             form.addRow(detect_group)
             
-            form.addRow("Objects to Track:", objects_field)
+            # Create objects row with help link
+            objects_row = QHBoxLayout()
+            objects_row.addWidget(objects_field)
+            help_link = QLabel('&nbsp;<a href="#" style="color: #2c6b7d; text-decoration: none;">📋 View COCO Classes</a>')
+            help_link.setTextFormat(Qt.RichText)
+            help_link.setTextInteractionFlags(Qt.LinksAccessibleByMouse)
+            help_link.linkActivated.connect(lambda: CocoClassesDialog(self).exec())
+            objects_row.addWidget(help_link)
+            objects_container = QWidget()
+            objects_container.setLayout(objects_row)
+            form.addRow("Objects to Track", objects_container)
             
             # Snapshots
             snapshots_group = QGroupBox("Snapshots")

@@ -48,6 +48,58 @@ def cleanup_all_threads():
 # Register cleanup function to run on exit
 atexit.register(cleanup_all_threads)
 
+
+class CenteringMixin:
+    """Mixin class to provide window/dialog centering functionality"""
+    
+    def center_on_screen(self):
+        """Center the window/dialog on the screen with enhanced cross-system compatibility"""
+        try:
+            # Use QTimer to defer centering until widget is fully constructed
+            QTimer.singleShot(10, self._perform_centering)
+        except Exception as e:
+            print(f"Error setting up centering timer: {e}")
+            # Fallback to immediate centering
+            self._perform_centering()
+    
+    def _perform_centering(self):
+        """Perform the actual centering with robust error handling"""
+        try:
+            # Get screen geometry
+            screen = QApplication.screenAt(self.pos())
+            if screen is None:
+                # Fallback to primary screen
+                screen = QApplication.primaryScreen()
+            
+            screen_geometry = screen.availableGeometry()
+            
+            # Get window/dialog size
+            widget_size = self.size()
+            
+            # Calculate center position
+            x = screen_geometry.center().x() - widget_size.width() // 2
+            y = screen_geometry.center().y() - widget_size.height() // 2
+            
+            # Ensure window doesn't go off-screen
+            x = max(screen_geometry.left(), min(x, screen_geometry.right() - widget_size.width()))
+            y = max(screen_geometry.top(), min(y, screen_geometry.bottom() - widget_size.height()))
+            
+            # Move window to center
+            self.move(x, y)
+            
+        except Exception as e:
+            print(f"Error in centering: {e}")
+            # Simple mathematical centering as fallback
+            try:
+                screen = QApplication.primaryScreen()
+                screen_geometry = screen.availableGeometry()
+                self.move(
+                    (screen_geometry.width() - self.width()) // 2,
+                    (screen_geometry.height() - self.height()) // 2
+                )
+            except Exception as fallback_error:
+                print(f"Fallback centering also failed: {fallback_error}")
+
 # ONVIF Discovery functionality
 class ONVIFDiscoveryWorker(QThread):
     """Background worker for ONVIF camera discovery"""
@@ -456,7 +508,7 @@ class ONVIFDiscoveryWorker(QThread):
         except:
             pass
 
-class ONVIFDiscoveryDialog(QDialog):
+class ONVIFDiscoveryDialog(QDialog, CenteringMixin):
     """Dialog for discovering ONVIF cameras"""
     camera_selected = Signal(dict)
     
@@ -465,6 +517,9 @@ class ONVIFDiscoveryDialog(QDialog):
         self.setWindowTitle("🔍 ONVIF Camera Discovery")
         self.setModal(True)
         self.resize(700, 500)
+        
+        # Center the dialog on screen
+        self.center_on_screen()
         
         self.discovered_cameras = []
         self.worker = None
@@ -715,7 +770,7 @@ class MyDumper(yaml.Dumper):
         
         return '\n'.join(result_lines)
 
-class CocoClassesDialog(QDialog):
+class CocoClassesDialog(QDialog, CenteringMixin):
     """Dialog to show available COCO classes - exact copy from config_gui.py"""
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -752,10 +807,13 @@ class CocoClassesDialog(QDialog):
         
         layout.addLayout(btn_layout)
         self.setLayout(layout)
+        
+        # Center the dialog on screen
+        self.center_on_screen()
 
 
 
-class SimpleCameraGUI(QWidget):
+class SimpleCameraGUI(QWidget, CenteringMixin):
     """Simple Camera Configuration GUI - exact design from config_gui.py"""
     
     def __init__(self):
@@ -777,11 +835,8 @@ class SimpleCameraGUI(QWidget):
         self.resize(win_width, win_height)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
 
-        # Center the window
-        self.move(
-            (screen_width - win_width) // 2,
-            (screen_height - win_height) // 2
-        )
+        # Center the window using Qt's built-in method for better reliability
+        self.center_on_screen()
 
         # Global Layout with responsive setup
         layout = QVBoxLayout(self)
