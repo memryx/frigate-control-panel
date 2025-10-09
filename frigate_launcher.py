@@ -1722,7 +1722,8 @@ class CameraSetupWelcomeDialog(QDialog):
         message.setFont(QFont("Segoe UI", 14))
         message.setText(
             "🎯 To get started, first you need to setup your cameras.\n\n"
-            "📋 Use this guide to setup first."
+            "📋 Use this guide to setup Amcrest cameras first.\n"
+            "📖 For other camera brands, please follow your camera's manual"
         )
         message.setStyleSheet("""
             QLabel {
@@ -1745,7 +1746,7 @@ class CameraSetupWelcomeDialog(QDialog):
         button_layout.setContentsMargins(40, 20, 40, 20)  # Add horizontal margins
         
         # Start Setup button - simplified to ensure text shows
-        self.start_setup_btn = QPushButton("🚀 Start Camera Setup")
+        self.start_setup_btn = QPushButton("🚀 Start Amcrest Camera Setup")
         self.start_setup_btn.setFont(QFont("Segoe UI", 14, QFont.Bold))
         self.start_setup_btn.setMinimumHeight(70)
         self.start_setup_btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
@@ -3962,7 +3963,7 @@ class FrigateLauncher(QMainWindow):
     def show_camera_setup_guide(self):
         """Display the camera setup guide in a professional dialog with modern styling"""
         dialog = QDialog(self)
-        dialog.setWindowTitle("Camera Setup Guide")
+        dialog.setWindowTitle("Amcrest Camera Setup Guide")
         dialog.resize(1100, 800)  # Slightly smaller for better fit
         dialog.setStyleSheet("""
             QDialog {
@@ -4004,7 +4005,7 @@ class FrigateLauncher(QMainWindow):
         icon_label.setFixedSize(40, 40)
         icon_label.setAlignment(Qt.AlignCenter)
         
-        title_label = QLabel("Camera Setup Guide")
+        title_label = QLabel("Amcrest Camera Setup Guide")
         title_label.setStyleSheet("""
             font-family: 'Segoe UI', 'SF Pro Display', Arial, sans-serif;
             font-size: 24px;
@@ -4013,7 +4014,7 @@ class FrigateLauncher(QMainWindow):
             background: none;
         """)
         
-        subtitle_label = QLabel("Complete step-by-step setup instructions")
+        subtitle_label = QLabel("Complete step-by-step setup instructions for Amcrest IP cameras")
         subtitle_label.setStyleSheet("""
             font-family: 'Segoe UI', Arial, sans-serif;
             font-size: 14px;
@@ -4062,6 +4063,50 @@ class FrigateLauncher(QMainWindow):
         content_layout = QVBoxLayout(content_widget)
         content_layout.setContentsMargins(30, 20, 30, 20)  # Reduced margins
         content_layout.setSpacing(18)  # Tighter spacing
+        
+        # Add introduction section for Amcrest cameras
+        intro_frame = QFrame()
+        intro_frame.setStyleSheet("""
+            QFrame {
+                background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
+                    stop: 0 #e6f7ff, stop: 1 #bae7ff);
+                border: 2px solid #1890ff;
+                border-radius: 12px;
+                padding: 20px;
+                margin-bottom: 10px;
+            }
+        """)
+        
+        intro_layout = QVBoxLayout(intro_frame)
+        intro_layout.setSpacing(10)
+        
+        intro_title = QLabel("📹 Amcrest Camera Setup Guide")
+        intro_title.setStyleSheet("""
+            font-family: 'Segoe UI', Arial, sans-serif;
+            font-size: 20px;
+            font-weight: 700;
+            color: #003a8c;
+            margin-bottom: 8px;
+        """)
+        
+        intro_text = QLabel(
+            "This guide is specifically designed for <b>Amcrest IP cameras</b> included with your MemryX box.\n\n"
+            "📋 <b>For other camera brands:</b> Please refer to your camera's manual and visit "
+            "<a href='https://docs.frigate.video'>docs.frigate.video</a> for RTSP configuration instructions.\n\n"
+            "⚡ Follow these steps to connect your Amcrest camera to WiFi and integrate it with Frigate."
+        )
+        intro_text.setWordWrap(True)
+        intro_text.setOpenExternalLinks(True)
+        intro_text.setStyleSheet("""
+            font-family: 'Segoe UI', Arial, sans-serif;
+            font-size: 14px;
+            color: #003a8c;
+            line-height: 1.5;
+        """)
+        
+        intro_layout.addWidget(intro_title)
+        intro_layout.addWidget(intro_text)
+        content_layout.addWidget(intro_frame)
         
         # Get cam_assets directory
         cam_assets_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cam_assets")
