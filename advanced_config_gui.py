@@ -1847,7 +1847,7 @@ class ConfigGUI(QWidget):
             detect_height = QSpinBox(); detect_height.setRange(100, 8000)
             detect_height.setValue(data.get("detect_height", 1080))
             detect_fps = QSpinBox(); detect_fps.setRange(1, 500)
-            detect_fps.setValue(data.get("detect_fps", 20))
+            detect_fps.setValue(data.get("detect_fps", 5))
             detect_enabled = QCheckBox(); detect_enabled.setChecked(data.get("detect_enabled", True))
 
             objects = QTextEdit(data.get("objects", "person,car,dog"))
@@ -2667,7 +2667,7 @@ class ConfigGUI(QWidget):
         detect:
         width: 1920
         height: 1080
-        fps: 20
+        fps: 5
         enabled: true
 
         objects:

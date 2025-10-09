@@ -642,7 +642,7 @@ cam1:
     detect:
     width: 1920
     height: 1080
-    fps: 20
+    fps: 5
     enabled: true
 
     objects:
@@ -8275,7 +8275,7 @@ cameras:
     detect:
       width: 1920
       height: 1080
-      fps: 20
+      fps: 5
       enabled: true
 
     objects:

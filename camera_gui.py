@@ -1540,7 +1540,7 @@ class SimpleCameraGUI(QWidget):
                 return False
             
             # Check for placeholder URLs - reject template configurations
-            placeholder_indicators = ["username:password", "camera_ip", "your_camera_ip", "192.168.1.100"]
+            placeholder_indicators = ["username:password", "camera_ip", "your_camera_ip", "your_ip_here", "example.com"]
             for placeholder in placeholder_indicators:
                 if placeholder in path.lower():
                     print(f"Skipping camera {camera_name}: contains placeholder URL ({placeholder})")
@@ -1605,7 +1605,7 @@ class SimpleCameraGUI(QWidget):
                 return False
             
             # Check for placeholder URLs - reject template configurations
-            placeholder_indicators = ["username:password", "camera_ip", "your_camera_ip", "192.168.1.100"]
+            placeholder_indicators = ["username:password", "camera_ip", "your_camera_ip", "your_ip_here", "example.com"]
             for placeholder in placeholder_indicators:
                 if placeholder in path.lower():
                     print(f"Skipping camera {camera_name}: contains placeholder URL ({placeholder})")
@@ -1620,6 +1620,42 @@ class SimpleCameraGUI(QWidget):
         except Exception as e:
             print(f"Error validating camera {camera_name}: {e}")
             return False
+
+    def detect_manual_url(self, camera_url, username, password, ip_address):
+        """Detect if a camera URL was manually entered vs auto-generated
+        
+        Strategy: If the URL field was manually enabled and contains user credentials,
+        treat it as manual. This is more reliable than pattern matching since users
+        often modify auto-generated URLs (e.g., changing substream from 0 to 1).
+        """
+        if not camera_url or not camera_url.strip():
+            return False
+            
+        # If the URL contains the user's credentials, it's likely been customized
+        # This handles cases where users modify auto-generated URLs
+        if username and password and ip_address:
+            # Check if URL contains the user's actual credentials and IP
+            credentials_in_url = f"{username}:{password}@{ip_address}" in camera_url
+            if credentials_in_url:
+                # If it contains their credentials, assume it was manually set/modified
+                # This covers both completely manual URLs and modified auto-generated ones
+                return True
+        
+        # If URL exists but doesn't contain user credentials, check if it looks like
+        # a standard auto-generated pattern that hasn't been customized
+        if camera_url.startswith("rtsp://"):
+            # Very basic auto-generated patterns that are clearly not customized
+            basic_patterns = [
+                "rtsp://admin:password@",
+                "rtsp://user:pass@", 
+                "rtsp://username:password@"
+            ]
+            for pattern in basic_patterns:
+                if pattern in camera_url:
+                    return False  # Clearly auto-generated placeholder
+        
+        # Default to manual if URL exists and we can't determine it's auto-generated
+        return bool(camera_url.strip())
 
     def rebuild_camera_tabs_with_existing_data(self, existing_cameras):
         """Rebuild camera tabs with existing camera data"""
@@ -1683,7 +1719,11 @@ class SimpleCameraGUI(QWidget):
             ip_address_field.setPlaceholderText("192.168.1.100")
             camera_url_field = QLineEdit(camera_url)
             camera_url_field.setPlaceholderText("rtsp://username:password@ip:port/cam/realmonitor?channel=1&subtype=0")
-            camera_url_field.setEnabled(False)  # Disabled by default
+            
+            # Determine if URL field should be enabled (manual) or disabled (auto-generated)
+            # Check if the URL looks like it was manually entered vs auto-generated
+            is_manual_url = self.detect_manual_url(camera_url, username, password, ip_address)
+            camera_url_field.setEnabled(is_manual_url)
             
             objects_field = QTextEdit(objects_text)
             objects_field.setMinimumHeight(100)
@@ -2275,6 +2315,7 @@ class SimpleCameraGUI(QWidget):
                 "password": cam["password"].text(),
                 "ip_address": cam["ip_address"].text(),
                 "camera_url": cam["camera_url"].text(),
+                "camera_url_enabled": cam["camera_url"].isEnabled(),  # Save enabled state
                 "objects": cam["objects"].toPlainText(),
                 "record_enabled": cam["record_enabled"].isChecked(),
                 "record_alerts": cam["record_alerts"].value(),
@@ -2282,6 +2323,7 @@ class SimpleCameraGUI(QWidget):
             })
 
         # Step 2: Clear tabs and rebuild
+        self._restoring_data = True  # Flag to prevent auto-generation during restoration
         self.cams_subtabs.clear()
         self.camera_tabs.clear()
         
@@ -2346,7 +2388,8 @@ class SimpleCameraGUI(QWidget):
             # Camera URL - optional, disabled by default - responsive + validation
             camera_url = QLineEdit(data.get("camera_url", ""))
             camera_url.setPlaceholderText("rtsp://username:password@ip:port/cam/realmonitor?channel=1&subtype=0 (auto-generated)")
-            camera_url.setEnabled(False)  # Disabled by default
+            # Restore the enabled state (default to disabled if not saved)
+            camera_url.setEnabled(data.get("camera_url_enabled", False))
             camera_url.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
             self.setup_field_validation(camera_url, self.validate_rtsp_url, 'camera_url')
             
@@ -2392,6 +2435,10 @@ class SimpleCameraGUI(QWidget):
             # Auto-generate RTSP URL when username, password, or IP changes
             def update_rtsp_url():
                 try:
+                    # Skip auto-generation if we're currently restoring data
+                    if hasattr(self, '_restoring_data') and self._restoring_data:
+                        return
+                        
                     if not camera_url.isEnabled():  # Only auto-generate if URL field is disabled
                         user = username.text().strip()
                         pwd = password.text().strip()
@@ -2686,6 +2733,13 @@ class SimpleCameraGUI(QWidget):
                     camera_url.setFocus()
                 self.mark_as_changed()
             enable_url_btn.clicked.connect(toggle_url_field)
+            
+            # Set button text based on restored enabled state
+            if camera_url.isEnabled():
+                enable_url_btn.setText("✨ Auto Generate URL")
+            else:
+                enable_url_btn.setText("🔗 Enable Manual URL")
+            
             url_layout.addWidget(enable_url_btn)
             url_container = QWidget()
             url_container.setLayout(url_layout)
@@ -2810,6 +2864,9 @@ class SimpleCameraGUI(QWidget):
                 "record_alerts": record_alerts,
                 "record_detections": record_detections,
             })
+        
+        # Clear the restoration flag to re-enable auto-generation
+        self._restoring_data = False
 
     def intelligent_config_reconstruction(self, config_content):
         """Reconstruct config from malformed YAML using intelligent parsing - preserve all sections"""
@@ -3050,7 +3107,7 @@ class SimpleCameraGUI(QWidget):
                     # Valid path should be an actual RTSP URL, not placeholder
                     if path and path.startswith('rtsp://'):
                         # Check for placeholder URLs - reject template configurations
-                        placeholder_indicators = ["username:password", "camera_ip", "your_camera_ip", "192.168.1.100"]
+                        placeholder_indicators = ["username:password", "camera_ip", "your_camera_ip", "your_ip_here", "example.com"]
                         is_placeholder = any(placeholder in path.lower() for placeholder in placeholder_indicators)
                         if not is_placeholder:
                             return True
@@ -3330,7 +3387,7 @@ class SimpleCameraGUI(QWidget):
                     "detect": {
                         "width": 1920,
                         "height": 1080,
-                        "fps": 20,
+                        "fps": 5,
                         "enabled": True
                     },
                     "objects": {
